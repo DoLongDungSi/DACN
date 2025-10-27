@@ -1,0 +1,56 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+
+  # backend:
+  #   build:
+  #     context: ./backend
+  #   ports:
+  #     - "5001:5001"
+  #   environment:
+  #     DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
+  #     API_BASE_URL: 
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  backend:
+      build:
+        context: ./backend
+      ports:
+        - "5001:5001"
+      environment:
+        # BẮT BUỘC: Thay thế bằng connection string của bạn
+        DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
+        # NÊN THAY ĐỔI: Tạo một chuỗi bí mật mạnh và đặt ở đây
+        JWT_SECRET: 'your_super_secret_jwt_key_should_be_long_and_random'
+        FRONTEND_URL: http://localhost:3000
+        # PORT: 5001
+        NODE_ENV: development
+      depends_on:
+        db:
+          condition: service_healthy
+
+  db:
+    image: postgres:13-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: mydatabase
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d mydatabase"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

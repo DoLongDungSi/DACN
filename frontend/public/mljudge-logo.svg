@@ -1,0 +1,17 @@
+<svg width="60" height="60" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="0" y="0" width="200%" height="200%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.3)"/>
+    </filter>
+  </defs>
+  
+  <!-- Áp dụng filter vào nhóm toàn bộ hình -->
+  <g filter="url(#shadow)">
+    <path d="M30 5C18.9543 5 10 13.9543 10 25C10 30.5 12.5 35 15 37.5C15.5 38 16.5 38 17 37.5C19.5 35 22 30.5 22 25C22 13.9543 18.9543 5 30 5Z" fill="#4A90E2"/>
+    <path d="M30 5C41.0457 5 50 13.9543 50 25C50 30.5 47.5 35 45 37.5C44.5 38 43.5 38 43 37.5C40.5 35 38 30.5 38 25C38 13.9543 41.0457 5 30 5Z" fill="#50E3C2"/>
+    <path d="M20 40H40C45.5228 40 50 44.4772 50 50V55H10V50C10 44.4772 14.4772 40 20 40Z" fill="#FFC107"/>
+    <rect x="28" y="35" width="4" height="10" rx="2" fill="#333333"/>
+    <circle cx="20" cy="50" r="5" fill="#FFFFFF" stroke="#333333" stroke-width="2"/>
+    <circle cx="40" cy="50" r="5" fill="#FFFFFF" stroke="#333333" stroke-width="2"/>
+  </g>
+</svg>
