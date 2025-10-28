@@ -13,6 +13,7 @@ interface ProblemEditorFormProps {
         data: Partial<Problem> & { evaluationScriptContent: string },
         tagIds: number[],
         metricIds: number[],
+        // *** MODIFIED: Added groundTruthFile to the type definition ***
         files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null }
     ) => void;
     onCancel: () => void;
@@ -21,7 +22,7 @@ interface ProblemEditorFormProps {
     loading: boolean;
 }
 
-// Updated default script content with detailed comments and correct logic
+// Default script content remains the same
 const defaultFormatCheckScript = `# Script chấm điểm mẫu - Hướng dẫn chi tiết
 # Vui lòng đọc kỹ các bình luận để đảm bảo script của bạn hoạt động chính xác.
 
@@ -247,7 +248,6 @@ if __name__ == "__main__":
 
 `;
 
-// Component remains the same as provided in the context, only default script changed
 export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
     initialProblem,
     onSave,
@@ -292,7 +292,6 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
             setName(initialProblem.name); setDifficulty(initialProblem.difficulty); setProblemType(initialProblem.problemType);
             setContent(initialProblem.content); setSelectedTagIds(initialProblem.tags || []); setSelectedMetricIds(initialProblem.metrics || []);
             setTrainFile(null); setTestFile(null); setGroundTruthFile(null);
-            // Load existing script content if available, otherwise use default
              setScriptContent(initialProblem.evaluationScript || defaultFormatCheckScript);
         }
     }, [initialProblem]);
@@ -319,13 +318,14 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
              alert("Vui lòng tải lên đủ file train, test (public), và ground truth cho bài toán mới."); return;
         }
         const problemData: Partial<Problem> & { evaluationScriptContent: string } = { name, difficulty, problemType, content, evaluationScriptContent: scriptContent };
+        // *** FIXED: Pass groundTruthFile in the files object ***
         onSave(problemData, selectedTagIds, selectedMetricIds, { trainFile, testFile, groundTruthFile });
     };
 
     // --- File Info ---
     const currentTrainFileMeta = !isNew && Array.isArray(initialProblem.datasets) ? initialProblem.datasets.find(d => d.split === 'train') : undefined;
     const currentTestFileMeta = !isNew && Array.isArray(initialProblem.datasets) ? initialProblem.datasets.find(d => d.split === 'public_test') : undefined;
-    const currentGroundTruthExists = !isNew && initialProblem.hasGroundTruth;
+    const currentGroundTruthExists = !isNew && initialProblem.hasGroundTruth; // Assuming hasGroundTruth indicates content presence
 
     // --- Render ---
     return (
@@ -384,6 +384,7 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
             </div>
              {/* Styles */}
              <style>{`
+                /* Styles remain the same */
                 .input-label { display: block; font-size: 0.875rem; font-weight: 500; color: #4b5563; margin-bottom: 0.5rem; }
                 .input-style { width: 100%; padding: 0.5rem 1rem; border: 1px solid #d1d5db; border-radius: 0.5rem; outline: none; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); transition: border-color 150ms ease-in-out, box-shadow 150ms ease-in-out; }
                 .input-style:focus { border-color: #4f46e5; box-shadow: 0 0 0 2px #c7d2fe; }

@@ -32,67 +32,67 @@ export const ProblemEditorPage: React.FC = () => {
      }
 
 
-     const handleSaveProblem = async (
-        problemData: Partial<Problem>,
-        tagIds: number[],
-        metricIds: number[],
-        files: { trainFile: File | null; testFile: File | null }
+    const handleSaveProblem = async (
+    data: Partial<Problem> & { evaluationScriptContent: string },
+    tagIds: number[],
+    metricIds: number[],
+    files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null },
     ) => {
-        if (!currentUser) return;
+    if (!currentUser) return;
 
-        setLoading(true);
-        setError(""); // Clear global error
-        setPageError(""); // Clear local error
+    setLoading(true);
+    setError("");
+    setPageError("");
 
-        try {
-            const formData = new FormData();
+    try {
+        const formData = new FormData();
 
-            // Prepare data, including existing datasets if updating
-            const dataToSend = {
-                ...problemData,
-                tagIds,
-                metricIds,
-                // Include existing datasets only if it's an update and they exist
-                 existingDatasets: (!isNew && editingProblem?.datasets) ? editingProblem.datasets : [],
-            };
-            formData.append("problemData", JSON.stringify(dataToSend));
-            // Append files if they exist
-            if (files.trainFile) formData.append('trainCsv', files.trainFile); // Key matches backend middleware
-            if (files.testFile) formData.append('testCsv', files.testFile); // Key matches backend middleware
+        const dataToSend = {
+        ...data,
+        tagIds,
+        metricIds,
+        // giữ lại datasets khi update
+        existingDatasets: (!isNew && editingProblem?.datasets) ? editingProblem.datasets : [],
+        };
 
-
-            if (isNew) {
-                // Creating a new problem
-                 // **Validation:** Ensure files are present for new problems
-                if (!files.trainFile || !files.testFile) {
-                    throw new Error("Vui lòng tải lên cả file train và test cho bài toán mới.");
-                }
-                await api.post("/problems", formData);
-                showToast("Tạo bài toán thành công!", "success"); // Use toast
-            } else if (editingProblem) {
-                // Updating an existing problem
-                 // Authorization check: Ensure creator is owner or original author
-                 if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) {
-                     throw new Error("Bạn không được phép chỉnh sửa bài toán này.");
-                 }
-                await api.put(`/problems/${editingProblem.id}`, formData);
-                 showToast("Cập nhật bài toán thành công!", "success"); // Use toast
-            }
-
-            await fetchAllData(); // Refresh data after successful save
-            setEditingProblem(null); // Clear editing state
-            setPage("problems"); // Navigate back to the list
-
-        } catch (e: any) {
-            console.error("Failed to save problem", e);
-            const errorMsg = e.message || `Lưu bài toán thất bại. ${isNew ? 'Kiểm tra xem tên bài toán đã tồn tại chưa.' : ''}`;
-            // Let the API helper show the toast for API errors
-            // setError(errorMsg); // Set global error as well
-            setPageError(errorMsg); // Show error specific to this page
-        } finally {
-            setLoading(false);
+        // Ground truth bắt buộc khi tạo mới
+        if (files.groundTruthFile) {
+        formData.append('groundTruthCsv', files.groundTruthFile, files.groundTruthFile.name);
+        } else if (isNew) {
+        throw new Error('Vui lòng chọn file Ground Truth (.csv)');
         }
+
+        formData.append('problemData', JSON.stringify(dataToSend));
+        if (files.trainFile) formData.append('trainCsv', files.trainFile);
+        if (files.testFile)  formData.append('testCsv',  files.testFile);
+
+        if (isNew) {
+        if (!files.trainFile || !files.testFile) {
+            throw new Error('Vui lòng tải lên cả file train và test cho bài toán mới.');
+        }
+        await api.post('/problems', formData);
+        showToast('Tạo bài toán thành công!', 'success');
+        } else if (editingProblem) {
+        if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) {
+            throw new Error('Bạn không được phép chỉnh sửa bài toán này.');
+        }
+        await api.put(`/problems/${editingProblem.id}`, formData);
+        showToast('Cập nhật bài toán thành công!', 'success');
+        }
+
+        await fetchAllData();
+        setEditingProblem(undefined);
+        setPage('problems');
+    } catch (e: any) {
+        const msg = e?.message || 'Lưu bài toán thất bại';
+        setPageError(msg);
+        setError(msg);
+        showToast(msg, 'error');
+    } finally {
+        setLoading(false);
+    }
     };
+
 
     const handleCancel = () => {
          setEditingProblem(null);
