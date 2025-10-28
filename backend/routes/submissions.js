@@ -2,8 +2,9 @@
 const express = require('express');
 const pool = require('../config/db');
 const { authMiddleware } = require('../middleware/auth');
-const { singleUploadMiddleware } = require('../config/multer'); // Use single file upload
+const { singleUploadMiddleware } = require('../config/multer');
 const { toCamelCase } = require('../utils/helpers');
+const axios = require('axios');
 
 const router = express.Router();
 
@@ -11,119 +12,250 @@ const router = express.Router();
 router.post(
     '/',
     authMiddleware,
-    singleUploadMiddleware('submissionFile'), // Expecting a single file named 'submissionFile'
+    singleUploadMiddleware('submissionFile'),
     async (req, res) => {
         const { problemId } = req.body;
         const userId = req.userId;
-        const submissionFile = req.file; // File data from multer
+        const submissionFile = req.file;
 
         // --- Validation ---
-        if (!problemId) {
-            return res.status(400).json({ message: 'Problem ID is required.' });
+        if (!problemId) return res.status(400).json({ message: 'Problem ID is required.' });
+        if (!submissionFile) return res.status(400).json({ message: 'Submission file is required.' });
+        if (!submissionFile.originalname.toLowerCase().endsWith('.csv')) {
+             return res.status(400).json({ message: 'Submission file must be a .csv file.' });
         }
-         // Check if file exists (multer puts it in req.file)
-         if (!submissionFile) {
-             return res.status(400).json({ message: 'Submission file is required.' });
-         }
-         // Optional: Add more file validation (e.g., check extension, size again although multer handles limits)
-         // console.log("Received submission file:", submissionFile.originalname, submissionFile.mimetype, submissionFile.size);
+        console.log(`Received submission for problem ${problemId} from user ${userId}: ${submissionFile.originalname}`);
 
-
-        // --- Simulation/Placeholder Logic ---
-        // TODO: Replace this with actual model evaluation logic
-        await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000)); // Simulate processing time
-
-        let simulatedScore;
-        let evaluationStatus = 'succeeded'; // Assume success for now
-        let runtime = 1500 + Math.random() * 2000; // Simulate runtime
-
+        let client;
         try {
-            // Check if problem exists and get its type for scoring simulation
-            const problemRes = await pool.query('SELECT problem_type FROM problems WHERE id = $1', [problemId]);
+            client = await pool.connect();
+
+            // Fetch problem details: script, ground truth content, AND public test content
+            // MODIFIED: Select public_test_content directly
+            const problemRes = await client.query(
+                `SELECT evaluation_script, ground_truth_content, public_test_content FROM problems WHERE id = $1`,
+                 [problemId]
+            );
+
             if (problemRes.rows.length === 0) {
                 return res.status(404).json({ message: 'Problem not found.' });
             }
 
-            // Simulate score based on problem type
-            const problemType = problemRes.rows[0].problem_type;
-            if (problemType === 'classification') {
-                simulatedScore = Math.random() * (0.95 - 0.6) + 0.6; // Simulate accuracy score
-            } else if (problemType === 'regression') {
-                simulatedScore = Math.random() * (30000 - 10000) + 10000; // Simulate RMSE score
-            } else {
-                 // Handle unknown problem type if necessary
-                 console.warn(`Unknown problem type "${problemType}" for problem ID ${problemId}. Using default score.`);
-                 simulatedScore = Math.random(); // Default random score
+            const evaluationScript = problemRes.rows[0].evaluation_script;
+            const groundTruthContent = problemRes.rows[0].ground_truth_content;
+            const publicTestContent = problemRes.rows[0].public_test_content; // Get content directly
+
+            // Check if all necessary data is present
+            if (!evaluationScript) {
+                return res.status(500).json({ message: 'Evaluation script for this problem is missing.' });
+            }
+            if (!groundTruthContent) {
+                 return res.status(500).json({ message: 'Ground truth content for this problem is missing.' });
+            }
+            if (!publicTestContent) { // Check the newly fetched content
+                return res.status(500).json({ message: 'Public test dataset content for this problem is missing.' });
+            }
+
+
+            // --- Call Evaluation Microservice ---
+            const microserviceUrl = process.env.EVALUATION_SERVICE_URL || 'http://microservice:5002/evaluate';
+            console.log(`Calling evaluation microservice at ${microserviceUrl}`);
+
+            let evaluationResult;
+            try {
+                // Send submission, script, ground truth, AND public test content
+                const response = await axios.post(microserviceUrl, {
+                    submission_file_content: submissionFile.buffer.toString('utf-8'),
+                    ground_truth_content: groundTruthContent,
+                    public_test_content: publicTestContent, // Send the fetched content
+                    evaluation_script_content: evaluationScript,
+                }, {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 60000 // 60 seconds timeout
+                });
+                evaluationResult = response.data;
+                console.log('Evaluation microservice response:', evaluationResult);
+
+                 // MODIFIED: Validate based on microservice's structured response
+                 // Microservice now handles validation of score >= 0 on success
+                 if (evaluationResult.status === 'succeeded' && (typeof evaluationResult.score !== 'number' || evaluationResult.score < 0)) {
+                     console.error("Microservice reported success but score is invalid:", evaluationResult.score);
+                     evaluationResult.status = 'failed';
+                     evaluationResult.error = evaluationResult.error || "Invalid score value received from evaluator.";
+                     evaluationResult.score = null; // Ensure score is null on failure
+                 }
+
+            } catch (microserviceError) {
+                 const responseData = microserviceError?.response?.data;
+                 let errorDetails = "Unknown evaluation service error.";
+                 let statusFromError = 'failed';
+                 let scoreFromError = null; // Keep score null on error unless explicitly set below
+
+                 if (responseData) {
+                     errorDetails = responseData.error || errorDetails;
+                     // Microservice might return a score even on failure (-1 or 0)
+                     if (typeof responseData.score === 'number') {
+                          scoreFromError = responseData.score; // Keep the score reported by microservice
+                     }
+                     // Use the status from microservice if available
+                     statusFromError = responseData.status || statusFromError;
+                 } else if (microserviceError instanceof Error) {
+                    errorDetails = microserviceError.message;
+                 } else {
+                     errorDetails = String(microserviceError);
+                 }
+
+                console.error('Error calling evaluation microservice:', errorDetails);
+                // Ensure runtime is null if the call itself failed badly
+                const runtimeOnError = (responseData && typeof responseData.runtime_ms === 'number') ? responseData.runtime_ms : null;
+                evaluationResult = {
+                    status: statusFromError, // Use status from response if possible
+                    error: `Evaluation service error: ${errorDetails}`,
+                    score: scoreFromError, // Keep score (-1 or 0) if microservice provided it
+                    runtime_ms: runtimeOnError
+                };
             }
 
             // --- Database Insertion ---
-            const insertQuery = `
-              INSERT INTO submissions (problem_id, user_id, status, public_score, runtime_ms)
-              VALUES ($1, $2, $3, $4, $5)
-              RETURNING *`; // Return the newly inserted row
+            // MODIFIED: Determine final status based on microservice response and reported score
+            let finalStatus = 'failed'; // Default to failed
+            let finalScore = null; // Default to null score
+            let finalDetails = evaluationResult.error ? { error: evaluationResult.error } : null;
 
-            const result = await pool.query(insertQuery, [
+            if (evaluationResult.status === 'succeeded' && typeof evaluationResult.score === 'number' && evaluationResult.score >= 0) {
+                 finalStatus = 'succeeded';
+                 finalScore = evaluationResult.score;
+            } else {
+                // If failed, check the score reported by microservice to set a more specific status
+                if (typeof evaluationResult.score === 'number') {
+                    if (evaluationResult.score === -1.0) {
+                        finalStatus = 'format_error'; // Specific status for format error
+                        if (finalDetails) finalDetails.type = 'FORMAT_ERROR';
+                         else finalDetails = { type: 'FORMAT_ERROR', error: 'Submission format check failed.'};
+                    } else if (evaluationResult.score === 0.0) {
+                         // Check if error message indicates runtime error rather than just score 0
+                         if (evaluationResult.error && evaluationResult.error.toLowerCase().includes('script exited') || evaluationResult.error.toLowerCase().includes('traceback')) {
+                            finalStatus = 'runtime_error'; // Specific status for script error after format check
+                            if (finalDetails) finalDetails.type = 'RUNTIME_ERROR';
+                            else finalDetails = { type: 'RUNTIME_ERROR', error: 'Evaluation script runtime error.' };
+                         } else {
+                             // It might be a valid score of 0, but status is failed (e.g., timeout before score write)
+                             finalStatus = 'failed'; // Keep generic failed for ambiguity or timeout
+                             if (finalDetails) finalDetails.type = 'FAILED_EXECUTION';
+                             else finalDetails = { type: 'FAILED_EXECUTION', error: evaluationResult.error || 'Evaluation failed.' };
+                         }
+                    } else {
+                         // Some other negative score or unexpected score on failure? Keep generic failed.
+                         finalStatus = 'failed';
+                         if (finalDetails) finalDetails.type = 'UNKNOWN_FAILURE';
+                         else finalDetails = { type: 'UNKNOWN_FAILURE', error: evaluationResult.error || 'Unknown evaluation failure.' };
+                    }
+                } else {
+                     // Status is 'failed' and score is null (e.g., timeout, setup error)
+                     finalStatus = 'failed'; // Keep generic failed
+                     if (finalDetails) finalDetails.type = 'SYSTEM_ERROR'; // Or more specific like TIMEOUT
+                     else finalDetails = { type: 'SYSTEM_ERROR', error: evaluationResult.error || 'Evaluation system error.' };
+                }
+                finalScore = null; // Ensure score is null for all failure types in DB
+            }
+
+            console.log(`Final Status: ${finalStatus}, Final Score for DB: ${finalScore}`);
+
+
+            const insertQuery = `
+              INSERT INTO submissions (problem_id, user_id, status, public_score, runtime_ms, evaluation_details)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              RETURNING *`;
+
+            const result = await client.query(insertQuery, [
                 problemId,
                 userId,
-                evaluationStatus,
-                simulatedScore,
-                runtime,
+                finalStatus, // Use the determined final status
+                finalScore, // Save actual score (>=0) or null
+                evaluationResult.runtime_ms || null,
+                finalDetails ? JSON.stringify(finalDetails) : null // Store structured details
             ]);
 
             const finalSub = result.rows[0];
 
-            // Convert numeric strings back to numbers for the response
+            // Prepare response data
             finalSub.public_score = finalSub.public_score ? parseFloat(finalSub.public_score) : null;
             finalSub.runtime_ms = finalSub.runtime_ms ? parseFloat(finalSub.runtime_ms) : null;
+            try {
+                if (finalSub.evaluation_details && typeof finalSub.evaluation_details === 'string') {
+                    finalSub.evaluation_details = JSON.parse(finalSub.evaluation_details);
+                }
+            } catch (parseError) {
+                console.warn("Failed to parse evaluation_details from DB:", parseError);
+                finalSub.evaluation_details = { error: "Failed to parse details" };
+             }
 
-            // Fetch username to include in the response (optional but useful for frontend)
-            const userRes = await pool.query('SELECT username FROM users WHERE id = $1', [userId]);
-            if (userRes.rows.length > 0) {
-                finalSub.username = userRes.rows[0].username;
-            } else {
-                finalSub.username = 'Unknown User'; // Fallback
-            }
-
+            const userRes = await client.query('SELECT username FROM users WHERE id = $1', [userId]);
+            finalSub.username = userRes.rows.length > 0 ? userRes.rows[0].username : 'Unknown User';
 
             res.status(201).json({ submission: toCamelCase(finalSub) });
 
         } catch (error) {
-            console.error('Error creating submission:', error);
-            // Handle specific DB errors if needed
+            console.error('Error creating submission in backend:', error);
+            if (error && typeof error === 'object' && 'code' in error && error.code === '23503' && 'constraint' in error && error.constraint === 'submissions_problem_id_fkey') {
+                return res.status(404).json({ message: 'Problem not found.' });
+            }
             res.status(500).json({ message: 'Lỗi server khi xử lý bài nộp.' });
+        } finally {
+            if (client) { client.release(); }
         }
     }
 );
 
-// --- Get Submissions (e.g., for "My Submissions" page) ---
-// Optional: Add filtering by problemId or userId if needed
+// --- Get Submissions ---
+// (No changes needed based on eval report)
 router.get('/', authMiddleware, async (req, res) => {
-    const userId = req.userId; // Get user ID from token
+    const userId = req.userId;
+    const { problemId } = req.query; // Allow filtering by problem
 
     try {
-        const query = `
+        let query = `
             SELECT s.*, p.name as problem_name, u.username
             FROM submissions s
             JOIN problems p ON s.problem_id = p.id
             JOIN users u ON s.user_id = u.id
-            WHERE s.user_id = $1
-            ORDER BY s.submitted_at DESC`; // Order by most recent
+            WHERE s.user_id = $1`;
+        const queryParams = [userId];
 
-        const result = await pool.query(query, [userId]);
+        if (problemId) {
+            query += ` AND s.problem_id = $2`;
+            queryParams.push(Number(problemId));
+        }
+        query += ` ORDER BY s.submitted_at DESC`;
 
-        const processedSubmissions = result.rows.map(sub => ({
-             ...sub,
-             public_score: sub.public_score ? parseFloat(sub.public_score) : null,
-             runtime_ms: sub.runtime_ms ? parseFloat(sub.runtime_ms) : null,
-        }));
+        const result = await pool.query(query, queryParams);
 
+        const processedSubmissions = result.rows.map(sub => {
+            let evaluationDetails = null;
+            try {
+                // Ensure evaluation_details is parsed if it's a string
+                if (sub.evaluation_details && typeof sub.evaluation_details === 'string') {
+                    evaluationDetails = JSON.parse(sub.evaluation_details);
+                } else if (sub.evaluation_details && typeof sub.evaluation_details === 'object') {
+                    // Already an object (or null)
+                    evaluationDetails = sub.evaluation_details;
+                }
+            } catch (parseError) {
+                console.warn("Failed to parse evaluation_details from DB for display:", parseError);
+                evaluationDetails = { error: "Failed to parse details" }; // Provide a fallback object
+            }
+            return {
+                ...sub,
+                public_score: sub.public_score ? parseFloat(sub.public_score) : null,
+                runtime_ms: sub.runtime_ms ? parseFloat(sub.runtime_ms) : null,
+                evaluation_details: evaluationDetails, // Assign potentially parsed object
+            };
+        });
         res.json({ submissions: toCamelCase(processedSubmissions) });
-
     } catch (error) {
         console.error('Error fetching submissions:', error);
         res.status(500).json({ message: 'Lỗi server khi lấy danh sách bài nộp.' });
     }
 });
-
 
 module.exports = router;

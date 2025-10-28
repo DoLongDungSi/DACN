@@ -9,21 +9,6 @@ Trên Arch-base, bạn có thể dùng yay để cài đặt:
 yay -S npm docker docker-compose python
 ```
 
-## Để chạy dự án
-### Ta cài các dependencies
-
-```bash
-# Cài cho back-end
-cd backend
-npm install
-cd ..
-
-# Cài cho front-end
-cd frontend
-npm install
-cd ..
-```
-
 ### Khởi tạo dự án
 ```bash
 # Windows

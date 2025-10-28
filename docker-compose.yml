@@ -5,34 +5,46 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:80"
+    environment:
+      VITE_API_BASE_URL: http://localhost:5001/api
 
-  # backend:
-  #   build:
-  #     context: ./backend
-  #   ports:
-  #     - "5001:5001"
-  #   environment:
-  #     DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
-  #     API_BASE_URL: 
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
   backend:
       build:
         context: ./backend
       ports:
         - "5001:5001"
       environment:
-        # BẮT BUỘC: Thay thế bằng connection string của bạn
         DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
-        # NÊN THAY ĐỔI: Tạo một chuỗi bí mật mạnh và đặt ở đây
         JWT_SECRET: 'your_super_secret_jwt_key_should_be_long_and_random'
-        FRONTEND_URL: http://localhost:3000
+        FRONTEND_URL: http://localhost:3000 
+        EVALUATION_SERVICE_URL: http://microservice:5002/evaluate 
         # PORT: 5001
         NODE_ENV: development
       depends_on:
         db:
           condition: service_healthy
+        microservice: 
+          condition: service_started
+      volumes:
+         - ./backend:/usr/src/app
+         - /usr/src/app/node_modules 
+      command: npm start 
+
+  microservice:
+    build:
+      context: ./microservice
+      dockerfile: Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      FLASK_ENV: development
+    volumes:
+       - ./microservice:/app
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
 
   db:
     image: postgres:13-alpine

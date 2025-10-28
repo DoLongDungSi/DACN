@@ -2,11 +2,11 @@ import React, { createContext, useState, useEffect, useCallback, useMemo, useRef
 import type { Crop, PixelCrop } from 'react-image-crop';
 import {
     User, Problem, Tag, Metric, Submission, DiscussionPost, DiscussionComment,
-    Page, AuthMode, CurrentView, ConfirmModalState, LeaderboardEntry, Dataset, Role, Direction, UserProfile, NotificationPreferences
+    Page, AuthMode, CurrentView, ConfirmModalState, LeaderboardEntry, Dataset, Role, Direction, UserProfile, NotificationPreferences, Education, WorkExperience
 } from '../types';
 import { API_BASE_URL, OWNER_ID } from '../api';
-import { getCroppedImg, centerCrop, makeAspectCrop } from '../utils';
-import { format, parseISO, startOfDay, formatDistanceToNow } from 'date-fns';
+import { getCroppedImg } from '../utils'; // Removed centerCrop, makeAspectCrop as they are unused now
+import { format, parseISO, startOfDay, formatDistanceToNow, isValid } from 'date-fns'; // Added isValid
 
 // Define the shape of the context data
 interface AppContextType {
@@ -29,19 +29,19 @@ interface AppContextType {
     loading: boolean;
     error: string;
     confirmModal: ConfirmModalState | null;
-    imgSrc: string;
-    crop?: Crop;
-    completedCrop?: PixelCrop;
+    imgSrc: string; // For avatar crop
+    // crop?: Crop; // Managed within AvatarCropModal now
+    // completedCrop?: PixelCrop; // Managed within AvatarCropModal now
     isAvatarModalOpen: boolean;
-    originalFileName: string;
-    imgRef: React.RefObject<HTMLImageElement>;
+    originalFileName: string; // For avatar crop filename
+    // imgRef: React.RefObject<HTMLImageElement>; // Managed within AvatarCropModal now
     problemHint: string | null;
     isGeneratingHint: boolean;
     leftPanelTab: 'description' | 'discussion' | 'datasets';
     rightPanelTab: 'leaderboard' | 'submissions';
     viewingPost: DiscussionPost | null;
     showNewPostModal: boolean;
-    replyingTo: number | null;
+    replyingTo: number | null; // ID of comment being replied to
     adminSubPage: 'users' | 'tags-metrics';
     toastMessage: string | null;
     toastType: 'success' | 'error' | 'info' | null;
@@ -69,8 +69,8 @@ interface AppContextType {
     setError: React.Dispatch<React.SetStateAction<string>>;
     setConfirmModal: React.Dispatch<React.SetStateAction<ConfirmModalState | null>>;
     setImgSrc: React.Dispatch<React.SetStateAction<string>>;
-    setCrop: React.Dispatch<React.SetStateAction<Crop | undefined>>;
-    setCompletedCrop: React.Dispatch<React.SetStateAction<PixelCrop | undefined>>;
+    // setCrop: React.Dispatch<React.SetStateAction<Crop | undefined>>;
+    // setCompletedCrop: React.Dispatch<React.SetStateAction<PixelCrop | undefined>>;
     setIsAvatarModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
     setOriginalFileName: React.Dispatch<React.SetStateAction<string>>;
     setProblemHint: React.Dispatch<React.SetStateAction<string | null>>;
@@ -94,7 +94,13 @@ interface AppContextType {
     handleSignup: (username: string, email: string, password: string) => Promise<void>;
     handleLogin: (credential: string, password: string) => Promise<void>;
     handleLogout: () => Promise<void>;
-    handleSaveProblem: (problemData: any, tagIds: number[], metricIds: number[], files: { trainFile: File | null, testFile: File | null }) => Promise<void>;
+    // Updated signature for handleSaveProblem
+    handleSaveProblem: (
+        problemData: Partial<Problem> & { evaluationScriptContent: string },
+        tagIds: number[],
+        metricIds: number[],
+        files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null } // Added groundTruthFile
+    ) => Promise<void>;
     handleDeleteProblem: (id: number) => void;
     handleSettingsUpdate: (updatedUserData: Pick<User, 'username' | 'email' | 'profile'>) => Promise<void>;
     handleChangePassword: (currentPass: string, newPass: string) => Promise<boolean>;
@@ -110,16 +116,18 @@ interface AppContextType {
     handleCommentSubmit: (postId: number, content: string, parentId: number | null) => Promise<void>;
     handleVote: (targetType: 'posts' | 'comments', targetId: number, voteType: 'up' | 'down') => Promise<void>;
     handleGetHint: () => Promise<void>;
-    downloadDataset: (content: string, filename: string) => void;
+    downloadDataset: (content: string | undefined, filename: string) => void; // Allow content to be undefined
     openConfirmModal: (title: string, message: string, onConfirm: () => void) => void;
     closeConfirmModal: () => void;
     navigateToProfile: (userIdOrUsername: number | string) => void;
     handleProblemSubmit: (formData: FormData) => Promise<void>;
-    handleAvatarUpdate: () => Promise<void>;
-    handleUpdatePost: (postId: number, title: string, content: string) => Promise<void>; // New handler
-    handleDeletePost: (postId: number) => void; // New handler (uses confirm modal)
-    handleUpdateComment: (commentId: number, content: string) => Promise<void>; // New handler
-    handleDeleteComment: (commentId: number) => void; // New handler (uses confirm modal)
+    // handleAvatarUpdate signature change to accept blob, handled internally now
+    handleAvatarUpdate: (croppedImageBlob: Blob | null, fileName: string) => Promise<void>;
+    handleUpdatePost: (postId: number, title: string, content: string) => Promise<void>;
+    handleDeletePost: (postId: number) => void;
+    handleUpdateComment: (commentId: number, content: string) => Promise<void>;
+    handleDeleteComment: (commentId: number) => void;
+    navigate: (targetPage: Page, targetId?: number | string | null, replace?: boolean) => void; // Added navigate function
 }
 
 // Create the context
@@ -146,12 +154,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [loading, setLoading] = useState<boolean>(true); // Start loading true
     const [error, setError] = useState<string>("");
     const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
-    const [imgSrc, setImgSrc] = useState('');
-    const [crop, setCrop] = useState<Crop>();
-    const [completedCrop, setCompletedCrop] = useState<PixelCrop>();
+    const [imgSrc, setImgSrc] = useState(''); // For avatar crop
+    // const [crop, setCrop] = useState<Crop>();
+    // const [completedCrop, setCompletedCrop] = useState<PixelCrop>();
     const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
     const [originalFileName, setOriginalFileName] = useState('avatar.png');
-    const imgRef = useRef<HTMLImageElement>(null);
+    // const imgRef = useRef<HTMLImageElement>(null); // Ref now managed inside AvatarCropModal
     const [problemHint, setProblemHint] = useState<string | null>(null);
     const [isGeneratingHint, setIsGeneratingHint] = useState(false);
     const [leftPanelTab, setLeftPanelTab] = useState<'description' | 'discussion' | 'datasets'>('description');
@@ -190,8 +198,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // --- ASYNC ACTION HANDLERS ---
      const fetchAllData = useCallback(async () => {
-         // Keep loading true if it was already true (initial load)
-         // setLoading(true); // Don't set loading true here for subsequent fetches
         try {
             const data = await api.get('/initial-data');
             setUsers(data.users || []);
@@ -204,31 +210,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             console.log("Fetched initial data:", data); // Log fetched data
         } catch (e) {
              console.error("Failed to fetch initial data:", e);
-             // Clear data on failure to avoid stale state
              setUsers([]); setProblems([]); setAllTags([]); setAllMetrics([]);
              setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({});
-        } finally {
-            // setLoading(false); // Only set loading false after INITIAL load (in useEffect)
         }
     }, [api]); // Dependencies: api only
 
 
     // --- Leaderboard Calculation Effect ---
      useEffect(() => {
-         if (loading || !problems.length || !allMetrics.length) { return; } // Don't calculate if loading or no data
+         if (loading || !problems.length || !allMetrics.length) { return; }
         const newLeaderboardData: { [key: number]: LeaderboardEntry[] } = {};
         try {
             problems.forEach((problem) => {
                 if (problem?.id === undefined || problem?.id === null) return;
                 const problemSubmissions = submissions.filter(s => s.problemId === problem.id && s.status === 'succeeded' && typeof s.publicScore === 'number' && s.submittedAt);
-                const primaryMetricId = problem.metrics?.[0];
+                // Find primary metric using metricsLinks from the updated Problem type
+                const primaryMetricLink = problem.metricsLinks?.find(link => link.isPrimary);
+                const primaryMetricId = primaryMetricLink?.metricId;
                 const metric = primaryMetricId !== undefined ? allMetrics.find(m => m.id === primaryMetricId) : undefined;
+
                 if (!metric || problemSubmissions.length === 0) { newLeaderboardData[problem.id] = []; return; }
                 const bestScores = new Map<number, Submission>();
                 problemSubmissions.forEach((sub) => {
-                     try { parseISO(sub.submittedAt!); } catch { return; } // Ensure date is valid
+                     try { if (!sub.submittedAt || !isValid(parseISO(sub.submittedAt))) return; } catch { return; } // Ensure date is valid
                     const existingBest = bestScores.get(sub.userId);
-                    if (!existingBest || typeof existingBest.publicScore !== 'number' || !existingBest.submittedAt) { bestScores.set(sub.userId, sub); return; }
+                    if (!existingBest || typeof existingBest.publicScore !== 'number' || !existingBest.submittedAt || !isValid(parseISO(existingBest.submittedAt))) { bestScores.set(sub.userId, sub); return; }
                     const isNewScoreBetter = metric.direction === 'maximize' ? sub.publicScore! > existingBest.publicScore : sub.publicScore! < existingBest.publicScore;
                     const areScoresEqual = sub.publicScore === existingBest.publicScore;
                     const isEarlierSubmission = new Date(sub.submittedAt!).getTime() < new Date(existingBest.submittedAt).getTime();
@@ -266,7 +272,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 console.log("No active session or error checking session.");
                 setCurrentUser(null);
                 setCurrentView('auth');
-                // No need to fetchAllData if not logged in
             } finally {
                 setLoading(false); // Set loading false after everything is done
             }
@@ -274,17 +279,120 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         initializeApp();
      }, [api, fetchAllData]); // Run only once on mount
 
+    // --- Navigation Function ---
+    // Added navigate function to centralize page changes and state resets
+    const navigate = useCallback((targetPage: Page, targetId: number | string | null = null, replace: boolean = false) => {
+        // Reset specific states based on the target page
+        if (targetPage !== 'problem-detail') setSelectedProblem(null);
+        if (targetPage !== 'profile') setViewingUserId(null);
+        if (targetPage !== 'problem-editor') setEditingProblem(null);
+        if (targetPage !== 'problem-detail' || !viewingPost) setViewingPost(null); // Keep viewingPost if navigating within problem detail? No, reset.
+        if (targetPage !== 'problem-detail') setLeftPanelTab('description'); // Reset problem detail tabs
+        if (targetPage !== 'problem-detail') setRightPanelTab('leaderboard');
+
+        // Handle target IDs for specific pages
+        if (targetPage === 'problem-detail' && typeof targetId === 'number') {
+            const problem = problems.find(p => p.id === targetId);
+            if (problem) setSelectedProblem(problem); else { showToast(`Không tìm thấy bài toán ID ${targetId}.`, 'error'); targetPage = 'problems'; } // Redirect if not found
+        } else if (targetPage === 'profile' && targetId !== null) {
+            let userToViewId: number | null = null;
+            if (typeof targetId === 'number') userToViewId = users.find(u => u.id === targetId)?.id ?? null;
+            else if (typeof targetId === 'string') userToViewId = users.find(u => u.username.toLowerCase() === targetId.toLowerCase())?.id ?? null;
+
+            if (userToViewId !== null) setViewingUserId(userToViewId); else { showToast(`Không tìm thấy người dùng "${targetId}".`, 'error'); targetPage = 'problems'; } // Redirect if not found
+        }
+
+        setPage(targetPage);
+        // We don't handle browser history here, relying on simple state changes
+    }, [problems, users, viewingPost, setPage, setSelectedProblem, setViewingUserId, setEditingProblem, setViewingPost, setLeftPanelTab, setRightPanelTab, showToast]);
+
+
     // --- Problem Handlers ---
-    const handleSaveProblem = useCallback(async ( problemData: Partial<Problem>, tagIds: number[], metricIds: number[], files: { trainFile: File | null; testFile: File | null } ) => { if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } setLoading(true); try { const formData = new FormData(); const currentDatasets = (editingProblem !== 'new' && editingProblem?.datasets) ? editingProblem.datasets : []; const dataToSend = { ...problemData, tagIds, metricIds, existingDatasets: currentDatasets, }; formData.append('problemData', JSON.stringify(dataToSend)); if (files.trainFile) formData.append('trainCsv', files.trainFile); if (files.testFile) formData.append('testCsv', files.testFile); if (editingProblem === 'new') { if (!files.trainFile || !files.testFile) throw new Error("Vui lòng tải lên cả file train và test."); const data = await api.post('/problems', formData); showToast("Tạo bài toán thành công!", "success"); } else if (editingProblem) { if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) throw new Error("Không được phép sửa."); const data = await api.put(`/problems/${editingProblem.id}`, formData); showToast("Cập nhật bài toán thành công!", "success"); } await fetchAllData(); setEditingProblem(null); setPage('problems'); } catch (e) {} finally { setLoading(false); } }, [api, currentUser, editingProblem, fetchAllData, showToast, setLoading, setEditingProblem, setPage]);
+    const handleSaveProblem = useCallback(async (
+        problemData: Partial<Problem> & { evaluationScriptContent: string },
+        tagIds: number[],
+        metricIds: number[],
+        files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null } // Added groundTruthFile
+    ) => {
+        if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; }
+        setLoading(true);
+        try {
+            const formData = new FormData();
+            // Prepare data, excluding existingDatasets (backend handles merging)
+            const dataToSend = {
+                ...problemData,
+                tagIds,
+                metricIds,
+                 // Send existing dataset metadata if updating, empty array otherwise
+                 existingDatasets: (editingProblem !== 'new' && editingProblem?.datasets) ? editingProblem.datasets : [],
+            };
+            formData.append('problemData', JSON.stringify(dataToSend));
+
+            // Append files if they exist
+            if (files.trainFile) formData.append('trainCsv', files.trainFile);
+            if (files.testFile) formData.append('testCsv', files.testFile);
+            if (files.groundTruthFile) formData.append('groundTruthCsv', files.groundTruthFile); // Added GT file
+
+            let savedProblemData;
+            if (editingProblem === 'new') {
+                if (!files.trainFile || !files.testFile || !files.groundTruthFile) throw new Error("Vui lòng tải lên đủ file train, test (public), và ground truth.");
+                savedProblemData = await api.post('/problems', formData);
+                showToast("Tạo bài toán thành công!", "success");
+            } else if (editingProblem) {
+                if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) throw new Error("Không được phép sửa.");
+                // We only need groundTruthFile if user wants to replace it
+                if (!files.groundTruthFile && !editingProblem.hasGroundTruth) throw new Error("Cần tải lên file ground truth.");
+                savedProblemData = await api.put(`/problems/${editingProblem.id}`, formData);
+                showToast("Cập nhật bài toán thành công!", "success");
+            } else {
+                throw new Error("Invalid editing state.");
+            }
+
+            await fetchAllData();
+            // Use navigate to go to the detail page of the newly saved/updated problem
+            if (savedProblemData?.problem?.id !== undefined) {
+                 navigate('problem-detail', savedProblemData.problem.id);
+            } else {
+                 navigate('problems'); // Fallback to list if ID is missing
+            }
+             setEditingProblem(null); // Clear editing state after navigation
+
+        } catch (e: any) {
+             // Let API helper show toast
+             console.error("Save Problem Error:", e);
+        } finally {
+            setLoading(false);
+        }
+    }, [api, currentUser, editingProblem, fetchAllData, showToast, setLoading, setEditingProblem, navigate]); // Added navigate
+
     const openConfirmModal = useCallback((title: string, message: string, onConfirm: () => void) => { setConfirmModal({ isOpen: true, title, message, onConfirm }); }, [setConfirmModal]);
     const closeConfirmModal = useCallback(() => setConfirmModal(null), [setConfirmModal]);
-     const handleDeleteProblem = useCallback((id: number) => { openConfirmModal("Xác nhận xóa", "Bạn chắc chắn muốn xóa bài toán này và mọi dữ liệu liên quan (bài nộp, thảo luận)? Hành động này không thể hoàn tác.", async () => { setLoading(true); try { await api.delete(`/problems/${id}`); await fetchAllData(); if (selectedProblem?.id === id) setSelectedProblem(null); showToast("Xóa bài toán thành công!", "success"); closeConfirmModal(); setPage('problems'); } catch (e) { closeConfirmModal(); /* Error shown by API helper */ } finally { setLoading(false); } }); }, [api, fetchAllData, openConfirmModal, closeConfirmModal, selectedProblem, showToast, setLoading, setSelectedProblem, setPage]);
+    const handleDeleteProblem = useCallback((id: number) => { openConfirmModal("Xác nhận xóa", "Bạn chắc chắn muốn xóa bài toán này và mọi dữ liệu liên quan (bài nộp, thảo luận)? Hành động này không thể hoàn tác.", async () => { setLoading(true); try { await api.delete(`/problems/${id}`); await fetchAllData(); if (selectedProblem?.id === id) setSelectedProblem(null); showToast("Xóa bài toán thành công!", "success"); closeConfirmModal(); navigate('problems'); } catch (e) { closeConfirmModal(); } finally { setLoading(false); } }); }, [api, fetchAllData, openConfirmModal, closeConfirmModal, selectedProblem, showToast, setLoading, setSelectedProblem, navigate]);
 
     // --- Settings Handlers ---
     const handleSettingsUpdate = useCallback(async (updatedUserData: Pick<User, 'username' | 'email' | 'profile'>) => { if (!currentUser) return; setLoading(true); try { const data = await api.put('/users/me', updatedUserData); const updatedUser = data.user; setCurrentUser(prev => prev ? { ...prev, ...updatedUser } : updatedUser); setUsers(prevUsers => prevUsers.map(u => u.id === updatedUser.id ? updatedUser : u)); showToast("Cập nhật thành công!", "success"); } catch (err) {} finally { setLoading(false); } }, [api, currentUser, showToast, setLoading, setCurrentUser, setUsers]);
-    const handleChangePassword = useCallback(async (currentPass: string, newPass: string): Promise<boolean> => { setLoading(true); try { await api.post('/auth/change-password', { currentPassword: currentPass, newPassword: newPass }); showToast('Đổi mật khẩu thành công!', 'success'); return true; } catch (err) { /* Error shown by API */ return false; } finally { setLoading(false); } }, [api, showToast, setLoading]);
-    const handleDeleteAccount = useCallback(() => { if (!currentUser || currentUser.id === OWNER_ID) return; openConfirmModal( "Xác nhận xóa", "CẢNH BÁO! Hành động này không thể hoàn tác...", async () => { setLoading(true); try { await api.delete('/users/me'); handleLogout(); /* No closeConfirmModal needed after logout */ } catch (err) { closeConfirmModal(); setLoading(false); } }); }, [api, currentUser, handleLogout, openConfirmModal, closeConfirmModal, setLoading]);
-     const handleAvatarUpdate = useCallback(async () => { if (!completedCrop || !imgRef.current || !currentUser) return; setLoading(true); try { const croppedImageFile = await getCroppedImg(imgRef.current, completedCrop, originalFileName, 128); if (croppedImageFile) { const reader = new FileReader(); reader.readAsDataURL(croppedImageFile); reader.onloadend = async () => { const base64data = reader.result; try { const data = await api.put('/users/me/avatar', { avatarDataUrl: base64data }); const updatedUser = data.user; setCurrentUser(prev => prev ? { ...prev, ...updatedUser } : updatedUser); setUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u)); setIsAvatarModalOpen(false); setImgSrc(''); showToast('Cập nhật ảnh đại diện thành công!', 'success'); } catch (err) {} finally { setLoading(false); } }; reader.onerror = () => { throw new Error("Không thể đọc file ảnh."); }; } else { throw new Error("Could not crop image."); } } catch (err) { showToast('Lỗi cập nhật ảnh đại diện.', 'error'); setLoading(false); } }, [api, completedCrop, originalFileName, currentUser, showToast, setLoading, setCurrentUser, setUsers, setIsAvatarModalOpen, setImgSrc]);
+    const handleChangePassword = useCallback(async (currentPass: string, newPass: string): Promise<boolean> => { setLoading(true); try { await api.post('/auth/change-password', { currentPassword: currentPass, newPassword: newPass }); showToast('Đổi mật khẩu thành công!', 'success'); return true; } catch (err) { return false; } finally { setLoading(false); } }, [api, showToast, setLoading]);
+    const handleDeleteAccount = useCallback(() => { if (!currentUser || currentUser.id === OWNER_ID) return; openConfirmModal( "Xác nhận xóa", "CẢNH BÁO! Hành động này không thể hoàn tác...", async () => { setLoading(true); try { await api.delete('/users/me'); handleLogout(); } catch (err) { closeConfirmModal(); setLoading(false); } }); }, [api, currentUser, handleLogout, openConfirmModal, closeConfirmModal, setLoading]);
+    // Avatar update moved here, accepting blob
+    const handleAvatarUpdate = useCallback(async (croppedImageBlob: Blob | null, fileName: string) => {
+        if (!croppedImageBlob || !currentUser) { if (!croppedImageBlob) showToast("Không thể cắt ảnh.", "error"); setIsAvatarModalOpen(false); setImgSrc(''); return; }
+        const reader = new FileReader();
+        reader.readAsDataURL(croppedImageBlob);
+        reader.onloadend = async () => {
+            const base64data = reader.result;
+            if (!base64data) { showToast("Không thể đọc ảnh.", "error"); setIsAvatarModalOpen(false); setImgSrc(''); return; }
+            setLoading(true);
+            try {
+                const data = await api.put('/users/me/avatar', { avatarDataUrl: base64data });
+                setCurrentUser(prev => prev ? { ...prev, ...data.user } : data.user);
+                setUsers(users.map(u => u.id === data.user.id ? data.user : u));
+                setIsAvatarModalOpen(false); setImgSrc(''); showToast("Cập nhật ảnh thành công!", "success");
+            } catch (err: any) { /* Error handled by api helper */ }
+            finally { setLoading(false); }
+        };
+        reader.onerror = () => { showToast("Lỗi đọc file ảnh.", "error"); setIsAvatarModalOpen(false); setImgSrc(''); }
+    }, [currentUser, api, setCurrentUser, setUsers, setIsAvatarModalOpen, setImgSrc, setLoading, showToast, users]); // Added users dependency
+
 
     // --- Admin Handlers ---
     const handleAdminUpdateUserRole = useCallback(async (id: number, role: Role) => { if (id === OWNER_ID) { showToast("Không thể thay đổi vai trò Owner.", "error"); return; } setLoading(true); try { const data = await api.put(`/admin/users/${id}/role`, { role }); const updatedUser = data.user; setUsers(prev => prev.map(u => u.id === id ? updatedUser : u)); showToast(`Đã cập nhật vai trò ID ${id}.`, "success"); } catch (e) {} finally { setLoading(false); } }, [api, setUsers, showToast, setLoading]);
@@ -296,52 +404,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleAdminDeleteMetric = useCallback(async (id: number) => { setLoading(true); try { await api.delete(`/admin/metrics/${id}`); setAllMetrics(prev => prev.filter(m => m.id !== id)); showToast(`Đã xóa metric ID ${id}.`, "success"); if (editingProblem !== 'new' && editingProblem?.metrics.includes(id)) { setEditingProblem(prev => prev === 'new' ? 'new' : prev ? { ...prev, metrics: prev.metrics.filter(mId => mId !== id) } : null); } } catch (e) {} finally { setLoading(false); } }, [api, editingProblem, showToast, setLoading, setAllMetrics, setEditingProblem]);
 
     // --- Discussion Handlers ---
-    const handlePostSubmit = useCallback(async (title: string, content: string) => { if (!selectedProblem) { showToast("Lỗi: Không có bài toán được chọn.", "error"); return; } if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } setLoading(true); try { const data = await api.post('/discussion/posts', { title, content, problemId: selectedProblem.id }); // Use correct endpoint
-         // Optimistic update or refetch
-         // setPosts(prev => [...prev, data.post]); // Basic optimistic add
-         await fetchAllData(); // Refetch for consistency
-         setShowNewPostModal(false);
-         // setViewingPost(posts.find(p => p.id === data.post.id) || data.post); // This might fetch the old posts state
-         setViewingPost(data.post); // Assume API returns the full post object needed
-         showToast("Đăng bài thành công!", "success"); } catch (err) {} finally { setLoading(false); } }, [api, selectedProblem, currentUser, showToast, setLoading, fetchAllData, setShowNewPostModal, setViewingPost /* remove posts dependency */]);
-    const handleCommentSubmit = useCallback(async (postId: number, content: string, parentId: number | null) => { if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } try { const data = await api.post('/discussion/comments', { content, postId, parentId }); // Use correct endpoint
-         // Optimistic update or refetch
-         // setComments(prev => [...prev, data.comment]); // Basic optimistic add
-         setReplyingTo(null);
-         await fetchAllData(); // Refetch for consistency
-         showToast("Bình luận thành công!", "success");
-         } catch (err) {} }, [api, currentUser, showToast, setReplyingTo, fetchAllData]);
-    const handleVote = useCallback(async (targetType: 'posts' | 'comments', targetId: number, voteType: 'up' | 'down') => { if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } const userId = currentUser.id; const optimisticUpdate = (items: any[], id: number) => items.map(item => { if (item.id !== id) return item; const upvotes = item.upvotedBy || []; const downvotes = item.downvotedBy || []; const wasUpvoted = upvotes.includes(userId); const wasDownvoted = downvotes.includes(userId); let newUpvotes = upvotes.filter((uid: number) => uid !== userId); let newDownvotes = downvotes.filter((uid: number) => uid !== userId); if (voteType === 'up' && !wasUpvoted) newUpvotes.push(userId); if (voteType === 'down' && !wasDownvoted) newDownvotes.push(userId); return { ...item, upvotedBy: newUpvotes, downvotedBy: newDownvotes }; }); if (targetType === 'posts') { setPosts(prev => optimisticUpdate(prev, targetId)); if (viewingPost?.id === targetId) setViewingPost(prev => prev ? optimisticUpdate([prev], targetId)[0] : null); } else setComments(prev => optimisticUpdate(prev, targetId)); try { await api.post(`/discussion/${targetType}/${targetId}/vote`, { voteType }); // Use correct endpoint
-         // Refetch after successful API call to ensure data consistency
-         await fetchAllData(); } catch (err) { showToast("Bỏ phiếu thất bại. Đang khôi phục...", "error"); fetchAllData(); } }, [api, currentUser, viewingPost, fetchAllData, showToast, setPosts, setViewingPost, setComments]);
-    // --- NEW Discussion Edit/Delete Handlers ---
-     const handleUpdatePost = useCallback(async (postId: number, title: string, content: string) => { setLoading(true); try { const data = await api.put(`/discussion/posts/${postId}`, { title, content }); setPosts(prev => prev.map(p => p.id === postId ? data.post : p)); if (viewingPost?.id === postId) setViewingPost(data.post); setEditingItemId(null); setEditingItemType(null); showToast("Cập nhật bài viết thành công.", "success"); } catch (e) {} finally { setLoading(false); } }, [api, setLoading, setPosts, viewingPost, setViewingPost, setEditingItemId, setEditingItemType, showToast]);
-     const handleDeletePost = useCallback((postId: number) => { openConfirmModal("Xóa bài viết?", "Hành động này sẽ xóa bài viết và tất cả bình luận liên quan.", async () => { setLoading(true); try { await api.delete(`/discussion/posts/${postId}`); setPosts(prev => prev.filter(p => p.id !== postId)); setComments(prev => prev.filter(c => c.postId !== postId)); // Optimistically remove comments too
-         if (viewingPost?.id === postId) setViewingPost(null); // Go back to list if viewing deleted post
-         closeConfirmModal(); showToast("Xóa bài viết thành công.", "success"); } catch (e) { closeConfirmModal(); } finally { setLoading(false); } }); }, [api, setLoading, setPosts, setComments, viewingPost, setViewingPost, openConfirmModal, closeConfirmModal, showToast]);
-     const handleUpdateComment = useCallback(async (commentId: number, content: string) => { setLoading(true); try { const data = await api.put(`/discussion/comments/${commentId}`, { content }); setComments(prev => prev.map(c => c.id === commentId ? data.comment : c)); setEditingItemId(null); setEditingItemType(null); showToast("Cập nhật bình luận thành công.", "success"); } catch (e) {} finally { setLoading(false); } }, [api, setLoading, setComments, setEditingItemId, setEditingItemType, showToast]);
-     const handleDeleteComment = useCallback((commentId: number) => { openConfirmModal("Xóa bình luận?", "Hành động này không thể hoàn tác.", async () => { setLoading(true); try { await api.delete(`/discussion/comments/${commentId}`); // Find replies to optimistically remove
-         const getRepliesRecursive = (id: number, all: DiscussionComment[]): number[] => { const direct = all.filter(c => c.parentId === id).map(c => c.id); return [...direct, ...direct.flatMap(childId => getRepliesRecursive(childId, all))]; }; const repliesToDelete = getRepliesRecursive(commentId, comments); setComments(prev => prev.filter(c => c.id !== commentId && !repliesToDelete.includes(c.id))); closeConfirmModal(); showToast("Xóa bình luận thành công.", "success"); } catch (e) { closeConfirmModal(); } finally { setLoading(false); } }); }, [api, setLoading, comments, setComments, openConfirmModal, closeConfirmModal, showToast]);
-
+    const handlePostSubmit = useCallback(async (title: string, content: string) => { if (!selectedProblem) { showToast("Lỗi: Không có bài toán được chọn.", "error"); return; } if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } setLoading(true); try { const data = await api.post('/discussion/posts', { title, content, problemId: selectedProblem.id }); await fetchAllData(); setShowNewPostModal(false); setViewingPost(data.post); showToast("Đăng bài thành công!", "success"); } catch (err) {} finally { setLoading(false); } }, [api, selectedProblem, currentUser, showToast, setLoading, fetchAllData, setShowNewPostModal, setViewingPost ]);
+    const handleCommentSubmit = useCallback(async (postId: number, content: string, parentId: number | null) => { if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } try { await api.post('/discussion/comments', { content, postId, parentId }); setReplyingTo(null); await fetchAllData(); showToast("Bình luận thành công!", "success"); } catch (err) {} }, [api, currentUser, showToast, setReplyingTo, fetchAllData]);
+    const handleVote = useCallback(async (targetType: 'posts' | 'comments', targetId: number, voteType: 'up' | 'down') => { if (!currentUser) { showToast("Bạn cần đăng nhập.", "error"); return; } const userId = currentUser.id; const optimisticUpdate = (items: any[], id: number) => items.map(item => { if (item.id !== id) return item; const upvotes = item.upvotedBy || []; const downvotes = item.downvotedBy || []; const wasUpvoted = upvotes.includes(userId); const wasDownvoted = downvotes.includes(userId); let newUpvotes = upvotes.filter((uid: number) => uid !== userId); let newDownvotes = downvotes.filter((uid: number) => uid !== userId); if (voteType === 'up' && !wasUpvoted) newUpvotes.push(userId); if (voteType === 'down' && !wasDownvoted) newDownvotes.push(userId); return { ...item, upvotedBy: newUpvotes, downvotedBy: newDownvotes }; }); if (targetType === 'posts') { setPosts(prev => optimisticUpdate(prev, targetId)); if (viewingPost?.id === targetId) setViewingPost(prev => prev ? optimisticUpdate([prev], targetId)[0] : null); } else setComments(prev => optimisticUpdate(prev, targetId)); try { await api.post(`/discussion/${targetType}/${targetId}/vote`, { voteType }); await fetchAllData(); } catch (err) { showToast("Bỏ phiếu thất bại. Đang khôi phục...", "error"); fetchAllData(); } }, [api, currentUser, viewingPost, fetchAllData, showToast, setPosts, setViewingPost, setComments]);
+    const handleUpdatePost = useCallback(async (postId: number, title: string, content: string) => { setLoading(true); try { const data = await api.put(`/discussion/posts/${postId}`, { title, content }); setPosts(prev => prev.map(p => p.id === postId ? data.post : p)); if (viewingPost?.id === postId) setViewingPost(data.post); setEditingItemId(null); setEditingItemType(null); showToast("Cập nhật bài viết thành công.", "success"); } catch (e) {} finally { setLoading(false); } }, [api, setLoading, setPosts, viewingPost, setViewingPost, setEditingItemId, setEditingItemType, showToast]);
+    const handleDeletePost = useCallback((postId: number) => { openConfirmModal("Xóa bài viết?", "Hành động này sẽ xóa bài viết và tất cả bình luận liên quan.", async () => { setLoading(true); try { await api.delete(`/discussion/posts/${postId}`); setPosts(prev => prev.filter(p => p.id !== postId)); setComments(prev => prev.filter(c => c.postId !== postId)); if (viewingPost?.id === postId) setViewingPost(null); closeConfirmModal(); showToast("Xóa bài viết thành công.", "success"); } catch (e) { closeConfirmModal(); } finally { setLoading(false); } }); }, [api, setLoading, setPosts, setComments, viewingPost, setViewingPost, openConfirmModal, closeConfirmModal, showToast]);
+    const handleUpdateComment = useCallback(async (commentId: number, content: string) => { setLoading(true); try { const data = await api.put(`/discussion/comments/${commentId}`, { content }); setComments(prev => prev.map(c => c.id === commentId ? data.comment : c)); setEditingItemId(null); setEditingItemType(null); showToast("Cập nhật bình luận thành công.", "success"); } catch (e) {} finally { setLoading(false); } }, [api, setLoading, setComments, setEditingItemId, setEditingItemType, showToast]);
+    const handleDeleteComment = useCallback((commentId: number) => { openConfirmModal("Xóa bình luận?", "Hành động này không thể hoàn tác.", async () => { setLoading(true); try { await api.delete(`/discussion/comments/${commentId}`); const getRepliesRecursive = (id: number, all: DiscussionComment[]): number[] => { const direct = all.filter(c => c.parentId === id).map(c => c.id); return [...direct, ...direct.flatMap(childId => getRepliesRecursive(childId, all))]; }; const repliesToDelete = getRepliesRecursive(commentId, comments); setComments(prev => prev.filter(c => c.id !== commentId && !repliesToDelete.includes(c.id))); closeConfirmModal(); showToast("Xóa bình luận thành công.", "success"); } catch (e) { closeConfirmModal(); } finally { setLoading(false); } }); }, [api, setLoading, comments, setComments, openConfirmModal, closeConfirmModal, showToast]);
 
     // --- Hint Handler ---
     const handleGetHint = useCallback(async () => { if (!selectedProblem) return; const prompt = `Give a concise hint (max 2-3 sentences, focus on approach, not code) for the machine learning problem: ${selectedProblem.name}. Problem description summary: ${selectedProblem.content.replace(/<[^>]*>/g, '').substring(0, 300)}...`; setIsGeneratingHint(true); setProblemHint(null); setError(''); try { const apiKey = ""; const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`; const payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 100 } }; const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); if (!response.ok) { const errorData = await response.json(); throw new Error(errorData?.error?.message || `API call failed: ${response.status}`); } const result = await response.json(); const text = result.candidates?.[0]?.content?.parts?.[0]?.text; if (!text) throw new Error("Không nhận được gợi ý."); setProblemHint(text.trim()); } catch (e: any) { showToast(`Lỗi gợi ý: ${e.message}`, 'error'); console.error("Hint Error:", e); } finally { setIsGeneratingHint(false); } }, [selectedProblem, showToast, setIsGeneratingHint, setProblemHint, setError]);
 
     // --- Dataset Download ---
-    const downloadDataset = useCallback((content: string, filename: string) => { if (!content) { showToast("Nội dung dataset trống.", "error"); return; } try { const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.setAttribute('download', filename); document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); } catch (e) { console.error("Download error:", e); showToast("Lỗi tải dataset.", "error"); } }, [showToast]);
+    // Updated to handle potentially undefined content
+    const downloadDataset = useCallback((content: string | undefined, filename: string) => {
+        if (!content) { showToast(`Nội dung cho file "${filename}" không có sẵn để tải về.`, "error"); return; }
+        try {
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.setAttribute('download', filename);
+            document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url);
+        } catch (e) { console.error("Download error:", e); showToast("Lỗi tải dataset.", "error"); }
+    }, [showToast]);
 
-     // --- Navigation ---
-     const navigateToProfile = useCallback((userIdOrUsername: number | string) => { let userToView: User | undefined; if (typeof userIdOrUsername === 'number') userToView = users.find(u => u.id === userIdOrUsername); else userToView = users.find(u => u.username.toLowerCase() === userIdOrUsername.toLowerCase()); if (userToView) { setViewingUserId(userToView.id); setPage('profile'); } else { showToast(`Không tìm thấy người dùng "${userIdOrUsername}".`, 'error'); } }, [users, setPage, setViewingUserId, showToast]);
+     // --- Navigation to Profile ---
+     const navigateToProfile = useCallback((userIdOrUsername: number | string) => { navigate('profile', userIdOrUsername); }, [navigate]);
 
       // --- Problem Submission Handler ---
      const handleProblemSubmit = useCallback(async (formData: FormData) => {
         setLoading(true);
         try {
             await api.post("/submissions", formData);
-            await fetchAllData(); // Fetch all data to update submissions and leaderboard
-             showToast("Nộp bài thành công!", "success");
-             setRightPanelTab("leaderboard"); // Switch tab after successful submission
-         } catch (submitError: any) { console.error("Submission failed:", submitError); /* Error shown by API helper */ }
+            await fetchAllData(); showToast("Nộp bài thành công!", "success"); setRightPanelTab("leaderboard");
+         } catch (submitError: any) { console.error("Submission failed:", submitError); }
          finally { setLoading(false); }
      }, [api, setLoading, fetchAllData, showToast, setRightPanelTab]);
 
@@ -352,25 +446,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submissions, setSubmissions, posts, setPosts, comments, setComments, leaderboardData, setLeaderboardData, page, setPage,
         editingProblem, setEditingProblem, currentView, setCurrentView, authMode, setAuthMode, selectedProblem, setSelectedProblem,
         viewingUserId, setViewingUserId, loading, setLoading, error, setError, confirmModal, setConfirmModal,
-        imgSrc, setImgSrc, crop, setCrop, completedCrop, setCompletedCrop, isAvatarModalOpen, setIsAvatarModalOpen, originalFileName, setOriginalFileName, imgRef,
+        imgSrc, setImgSrc, /* crop, setCrop, completedCrop, setCompletedCrop, imgRef, */ isAvatarModalOpen, setIsAvatarModalOpen, originalFileName, setOriginalFileName,
         problemHint, setProblemHint, isGeneratingHint, setIsGeneratingHint, leftPanelTab, setLeftPanelTab, rightPanelTab, setRightPanelTab,
         viewingPost, setViewingPost, showNewPostModal, setShowNewPostModal, replyingTo, setReplyingTo, adminSubPage, setAdminSubPage,
-        toastMessage, toastType, editingItemId, setEditingItemId, editingItemType, setEditingItemType, // Added editing state
+        toastMessage, toastType, editingItemId, setEditingItemId, editingItemType, setEditingItemType,
         api, fetchAllData, handleSignup, handleLogin, handleLogout, handleSaveProblem, handleDeleteProblem, handleSettingsUpdate, handleChangePassword, handleDeleteAccount,
         handleAdminUpdateUserRole, handleAdminToggleBanUser, handleAdminDeleteUser, handleAdminAddTag, handleAdminDeleteTag, handleAdminAddMetric, handleAdminDeleteMetric,
         handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
         showToast, clearToast, handleProblemSubmit, handleAvatarUpdate,
-        handleUpdatePost, handleDeletePost, handleUpdateComment, handleDeleteComment // Added new discussion handlers
+        handleUpdatePost, handleDeletePost, handleUpdateComment, handleDeleteComment, navigate
     }), [ // Ensure all state and callbacks are listed
         currentUser, users, problems, allTags, allMetrics, submissions, posts, comments, leaderboardData, page, editingProblem, currentView, authMode,
-        selectedProblem, viewingUserId, loading, error, confirmModal, imgSrc, crop, completedCrop, isAvatarModalOpen, originalFileName, /* imgRef omitted */
+        selectedProblem, viewingUserId, loading, error, confirmModal, imgSrc, /* crop, completedCrop, */ isAvatarModalOpen, originalFileName, /* imgRef omitted */
         problemHint, isGeneratingHint, leftPanelTab, rightPanelTab, viewingPost, showNewPostModal, replyingTo, adminSubPage,
-        toastMessage, toastType, editingItemId, editingItemType, // Added editing state
+        toastMessage, toastType, editingItemId, editingItemType,
         api, fetchAllData, handleSignup, handleLogin, handleLogout, handleSaveProblem, handleDeleteProblem, handleSettingsUpdate, handleChangePassword, handleDeleteAccount,
         handleAdminUpdateUserRole, handleAdminToggleBanUser, handleAdminDeleteUser, handleAdminAddTag, handleAdminDeleteTag, handleAdminAddMetric, handleAdminDeleteMetric,
         handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
         showToast, clearToast, handleProblemSubmit, handleAvatarUpdate,
-        handleUpdatePost, handleDeletePost, handleUpdateComment, handleDeleteComment // Added new discussion handlers
+        handleUpdatePost, handleDeletePost, handleUpdateComment, handleDeleteComment, navigate
     ]);
 
 
@@ -380,3 +474,4 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         </AppContext.Provider>
     );
 };
+

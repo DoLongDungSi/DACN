@@ -64,7 +64,7 @@ app.listen(PORT, () => {
    }
 });
 
-// Handle graceful shutdown (optional)
+// Handle graceful shutdown
 process.on('SIGTERM', () => {
     console.log('SIGTERM signal received: closing HTTP server');
     // Add cleanup logic here if needed (e.g., close DB pool)
