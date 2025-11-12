@@ -2,8 +2,69 @@
 const express = require('express');
 const pool = require('../config/db');
 const { toCamelCase } = require('../utils/helpers');
+const fs = require('fs');
+const path = require('path');
 
 const router = express.Router();
+
+const parseDatasets = (datasets) => {
+  if (!datasets) return [];
+  if (Array.isArray(datasets)) return datasets;
+  try { return JSON.parse(datasets); }
+  catch (e) { return []; }
+};
+
+const loadDatasetFromDisk = (filename) => {
+  if (!filename) return null;
+  const sanitizedFilename = path.basename(filename);
+  const candidatePaths = [
+    path.join('/usr/src/test', sanitizedFilename),
+    path.join(__dirname, '../../test', sanitizedFilename),
+    path.join(process.cwd(), 'test', sanitizedFilename),
+  ];
+  for (const candidate of candidatePaths) {
+    try {
+      if (fs.existsSync(candidate)) {
+        console.log(`[datasets] Reading dataset file from disk: ${candidate}`);
+        return fs.readFileSync(candidate, 'utf8');
+      }
+    } catch (e) {
+      console.error('[datasets] Error reading dataset file', candidate, e);
+    }
+  }
+  console.warn(`[datasets] Dataset fallback not found for filename: ${sanitizedFilename}`);
+  return null;
+};
+
+const buildDatasetList = (problemRow) => {
+  const rawDatasets = parseDatasets(problemRow.datasets);
+  if (!Array.isArray(rawDatasets)) return [];
+  return rawDatasets
+    .filter(entry => entry && entry.split)
+    .map(entry => {
+      const split = entry.split;
+      const sanitized = {
+        split,
+        filename: entry.filename || `${split}.csv`,
+        download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
+      };
+      if (split !== 'ground_truth') {
+        if (entry.content) {
+          sanitized.content = entry.content;
+        } else if (split === 'public_test' && problemRow.public_test_content) {
+          sanitized.content = problemRow.public_test_content;
+        } else {
+          const fallback = loadDatasetFromDisk(entry.filename);
+          if (fallback) {
+            console.log(`Loaded dataset fallback for problem ${problemRow.id} (${entry.filename})`);
+            sanitized.content = fallback;
+          }
+        }
+      }
+      return sanitized;
+    })
+    .filter(entry => entry.split !== 'ground_truth');
+};
 
 router.get('/', async (req, res) => {
   try {
@@ -23,22 +84,38 @@ router.get('/', async (req, res) => {
       ),
       // Query to fetch problems along with their tags and metrics as arrays
       pool.query(
-        `SELECT p.*, u.username as author_username,
-                COALESCE(tags.tag_ids, '{}'::int[]) as tags, -- Ensure empty array if no tags
-                COALESCE(metrics.metric_ids, '{}'::int[]) as metrics -- Ensure empty array if no metrics
+        `SELECT
+            p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
+            u.username as author_username,
+            p.datasets,
+            (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
+            (CASE WHEN p.ground_truth_content IS NOT NULL AND p.ground_truth_content != '' THEN true ELSE false END) as has_ground_truth,
+            (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
+            COALESCE(tags.tag_ids, '{}'::int[]) as tags,
+            COALESCE(metrics.metric_ids, '{}'::int[]) as metrics,
+            COALESCE(metric_links.links, '[]'::jsonb) as metrics_links
          FROM problems p
          JOIN users u ON p.author_id = u.id
          LEFT JOIN (
-           SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids -- Added ORDER BY for consistency
+           SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids
            FROM problem_tags
            GROUP BY problem_id
          ) tags ON p.id = tags.problem_id
          LEFT JOIN (
-           SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids -- Added ORDER BY for consistency
+           SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids
            FROM problem_metrics
            GROUP BY problem_id
          ) metrics ON p.id = metrics.problem_id
-         ORDER BY p.id` // Added ORDER BY for consistency
+         LEFT JOIN (
+           SELECT pm.problem_id,
+                  jsonb_agg(
+                     jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary)
+                     ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id
+                  ) as links
+           FROM problem_metrics pm
+           GROUP BY pm.problem_id
+         ) metric_links ON p.id = metric_links.problem_id
+         ORDER BY p.id`
       ),
       pool.query('SELECT * FROM tags ORDER BY name'),
       pool.query('SELECT * FROM metrics ORDER BY key'),
@@ -90,11 +167,16 @@ router.get('/', async (req, res) => {
       runtime_ms: sub.runtime_ms ? parseFloat(sub.runtime_ms) : null,
     }));
 
+    const normalizedProblems = problemsRes.rows.map(problem => {
+        problem.datasets = buildDatasetList(problem);
+        return problem;
+    });
+
     // Respond with camelCased data
     res.json(
       toCamelCase({
         users: usersRes.rows,
-        problems: problemsRes.rows,
+        problems: normalizedProblems,
         tags: tagsRes.rows,
         metrics: metricsRes.rows,
         submissions: processedSubmissions,

@@ -111,7 +111,8 @@ INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, da
 (1, 'Phân loại Bệnh tiểu đường', 'easy',
 '## Mô tả\n\nDự đoán xem một bệnh nhân có bị tiểu đường hay không dựa trên các chỉ số sức khỏe.\n\n## Dữ liệu\n\n* `train.csv`: Dữ liệu huấn luyện với các features và cột `Outcome` (0 hoặc 1).\n* `test.csv`: Dữ liệu kiểm tra chỉ chứa features.\n\n## Nộp bài\n\nNộp file csv có 2 cột: `id` và `prediction` (0 hoặc 1).\n\n## Đánh giá\n\nSử dụng **Accuracy**.\n',
 'classification', 1,
-'[{"split": "train", "filename": "diabetes_train.csv"}, {"split": "public_test", "filename": "diabetes_test.csv"}]',
+E'[{"split": "train", "filename": "diabetes_train.csv", "content": "id,Feature1,Feature2,Outcome\\n1,10,20,0\\n2,15,25,1\\n3,12,22,0\\n4,18,28,1\\n5,20,30,1\\n"},
+   {"split": "public_test", "filename": "diabetes_test.csv", "content": "id,Feature1,Feature2\\n1,10,20\\n2,15,25\\n3,12,22\\n4,18,28\\n5,20,30\\n"}]',
 '# Script chấm điểm mẫu: Accuracy
 import sys, pandas as pd, traceback
 from sklearn.metrics import accuracy_score
@@ -179,7 +180,8 @@ INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, da
 (2, 'Dự đoán giá nhà', 'medium',
 '## Mô tả\n\nDự đoán giá nhà dựa trên các đặc điểm của căn nhà.\n\n## Dữ liệu\n\n* `train.csv`: Dữ liệu huấn luyện với features và giá nhà (`SalePrice`).\n* `test.csv`: Dữ liệu kiểm tra chỉ chứa features.\n\n## Nộp bài\n\nNộp file csv có 2 cột: `id` và `prediction` (giá dự đoán).\n\n## Đánh giá\n\nSử dụng **Root Mean Squared Error (RMSE)**.\n',
 'regression', 1,
-'[{"split": "train", "filename": "house_train.csv"}, {"split": "public_test", "filename": "house_test.csv"}]',
+E'[{"split": "train", "filename": "house_train.csv", "content": "id,LotArea,YearBuilt,SalePrice\\n1001,8450,2003,150000\\n1002,9600,1976,220000\\n1003,11250,2001,185000\\n"},
+   {"split": "public_test", "filename": "house_test.csv", "content": "id,LotArea,YearBuilt\\n1001,8450,2003\\n1002,9600,1976\\n1003,11250,2001\\n"}]',
 '# Script chấm điểm mẫu: RMSE
 import sys, pandas as pd, traceback
 import numpy as np

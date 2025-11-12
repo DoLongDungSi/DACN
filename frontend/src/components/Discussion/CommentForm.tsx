@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'; // Added useEffect
-import { User } from '../../types';
+import type { User } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { useAppContext } from '../../hooks/useAppContext';
 import { LoadingSpinner } from '../Common/LoadingSpinner'; // Import LoadingSpinner

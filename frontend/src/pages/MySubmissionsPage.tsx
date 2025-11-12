@@ -1,10 +1,10 @@
 import React from 'react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useAppContext } from '../hooks/useAppContext';
-import { Problem } from '../types'; // Import Problem type if not already globally available
+import type { Problem } from '../types'; // Import Problem type if not already globally available
 
 export const MySubmissionsPage: React.FC = () => {
-    const { submissions, currentUser, problems, setPage, setSelectedProblem } = useAppContext();
+    const { submissions, currentUser, problems, setSelectedProblem, navigate } = useAppContext();
 
     if (!currentUser) {
         // Optionally redirect to login or show a message
@@ -24,7 +24,7 @@ export const MySubmissionsPage: React.FC = () => {
         const problem = problems.find((p) => p.id === problemId);
         if (problem) {
             setSelectedProblem(problem);
-            setPage('problem-detail');
+            navigate('problem-detail', problemId);
         }
     };
 

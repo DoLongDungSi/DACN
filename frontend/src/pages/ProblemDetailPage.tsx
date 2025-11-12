@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
 import remarkMath from 'remark-math'; // Import remarkMath
 import rehypeKatex from 'rehype-katex'; // Import rehypeKatex
@@ -6,16 +6,16 @@ import 'katex/dist/katex.min.css'; // Import KaTeX CSS
 import { ArrowLeft, Lightbulb, DownloadCloud, FileText, BarChart3, MessageSquare, Upload } from 'lucide-react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useAppContext } from '../hooks/useAppContext';
-import { Submission, LeaderboardEntry } from '../types';
+import type { Submission, LeaderboardEntry, Dataset } from '../types';
 import { DiscussionComponent } from '../components/Discussion';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 
 export const ProblemDetailPage: React.FC = () => {
     const {
-        selectedProblem, setSelectedProblem, setPage, submissions, currentUser, loading,
+        selectedProblem, setSelectedProblem, submissions, currentUser, loading,
         problemHint, setProblemHint, isGeneratingHint, leftPanelTab, setLeftPanelTab,
         rightPanelTab, setRightPanelTab, handleGetHint, downloadDataset,
-        navigateToProfile, handleProblemSubmit, leaderboardData,
+        navigateToProfile, handleProblemSubmit, leaderboardData, navigate, showToast,
     } = useAppContext();
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -27,9 +27,9 @@ export const ProblemDetailPage: React.FC = () => {
     useEffect(() => {
         if (!loading && !selectedProblem) {
             console.warn("No selected problem found after load. Redirecting.");
-            setPage('problems');
+            navigate('problems', null, true);
         }
-    }, [selectedProblem, loading, setPage]);
+    }, [selectedProblem, loading, navigate]);
 
     if (!selectedProblem) {
         return loading
@@ -46,6 +46,37 @@ export const ProblemDetailPage: React.FC = () => {
         });
 
     const currentLeaderboard = leaderboardData[selectedProblem.id] || [];
+
+    const handleDatasetDownload = useCallback(async (dataset: Dataset | null | undefined) => {
+        if (!dataset) return;
+        const filename = dataset.filename || `${dataset.split || 'dataset'}.csv`;
+        if (dataset.content) {
+            downloadDataset(dataset.content, filename);
+            return;
+        }
+        if (dataset.downloadUrl) {
+            try {
+                const response = await fetch(dataset.downloadUrl, { credentials: 'include' });
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text || `Không tải được dataset (${response.status}).`);
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(url);
+            } catch (error: any) {
+                showToast(error.message || 'Không thể tải dataset.', 'error');
+            }
+            return;
+        }
+        showToast('Dataset này chưa sẵn sàng để tải.', 'info');
+    }, [downloadDataset, showToast]);
 
     const handleSubmitClick = () => {
         if (!selectedProblem) return;
@@ -84,7 +115,7 @@ export const ProblemDetailPage: React.FC = () => {
                 {/* Back Button and Title Area */}
                 <div className="mb-8">
                      <button
-                        onClick={() => { setPage("problems"); setSelectedProblem(null); }}
+                        onClick={() => { navigate('problems'); setSelectedProblem(null); }}
                         className="text-indigo-600 font-semibold mb-3 flex items-center group text-sm hover:text-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-2 rounded"
                     >
                         <ArrowLeft className="w-4 h-4 mr-2 group-hover:-translate-x-1 transition-transform" />
@@ -146,9 +177,15 @@ export const ProblemDetailPage: React.FC = () => {
                                      {Array.isArray(selectedProblem.datasets) && selectedProblem.datasets.length > 0 ? (
                                         <div className="grid sm:grid-cols-2 gap-4">
                                             {selectedProblem.datasets.map((d, i) => (
-                                                d && d.content && d.filename ? (
-                                                    <button key={i} onClick={() => downloadDataset(d.content, d.filename)} className="download-button">
-                                                       <DownloadCloud className="w-5 h-5 flex-shrink-0" /> <span className="truncate">{d.filename}</span>
+                                                d ? (
+                                                    <button
+                                                        key={`${d.split}-${i}`}
+                                                        onClick={() => handleDatasetDownload(d)}
+                                                        disabled={!d.content && !d.downloadUrl}
+                                                        className={`download-button ${(!d.content && !d.downloadUrl) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                        title={(!d.content && !d.downloadUrl) ? 'Dataset chưa sẵn sàng.' : `Tải ${d.filename || d.split}`}
+                                                    >
+                                                        <DownloadCloud className="w-5 h-5 flex-shrink-0" /> <span className="truncate">{d.filename || d.split || `Dataset ${i + 1}`}</span>
                                                     </button>
                                                  ) : null
                                             ))}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Ban, CheckCircle, Trash2, Shield } from 'lucide-react';
-import { User, Role } from '../../types';
+import type { User, Role } from '../../types';
 import { OWNER_ID } from '../../api'; // Assuming OWNER_ID is defined in api/index.ts
 
 interface AdminUsersPanelProps {

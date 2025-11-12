@@ -1,5 +1,5 @@
 import React from 'react';
-// Correct import paths
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './contexts/AppContext';
 import { useAppContext } from './hooks/useAppContext';
 import { Header } from './components/Header';
@@ -18,7 +18,7 @@ import { Toast } from './components/Common/Toast';
 // Main application component that decides which view/page to render
 const AppContent: React.FC = () => {
     // Get state and functions from context
-    const { currentView, page, loading, toastMessage, toastType, clearToast } = useAppContext();
+    const { currentView, loading, toastMessage, toastType, clearToast } = useAppContext();
 
     if (currentView === "loading") {
         return (
@@ -41,14 +41,18 @@ const AppContent: React.FC = () => {
                  {/* Global Loading Indicator */}
                  {loading && <LoadingSpinner overlay={true} />}
 
-                {/* Page Content - Render based on 'page' state */}
-                {page === "problems" && <ProblemsListPage />}
-                {page === "problem-detail" && <ProblemDetailPage />}
-                {page === "my-submissions" && <MySubmissionsPage />}
-                {page === "profile" && <ProfilePage />}
-                {page === "admin" && <AdminPage />}
-                {page === "problem-editor" && <ProblemEditorPage />}
-                {page === "settings" && <SettingsPage />}
+                <Routes>
+                    <Route path="/" element={<ProblemsListPage />} />
+                    <Route path="/problems" element={<ProblemsListPage />} />
+                    <Route path="/problems/:problemId" element={<ProblemDetailPage />} />
+                    <Route path="/my-submissions" element={<MySubmissionsPage />} />
+                    <Route path="/profile" element={<ProfilePage />} />
+                    <Route path="/profile/:identifier" element={<ProfilePage />} />
+                    <Route path="/admin" element={<AdminPage />} />
+                    <Route path="/problem-editor" element={<ProblemEditorPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="*" element={<Navigate to="/problems" replace />} />
+                </Routes>
             </main>
              <ConfirmModal /> {/* Render the confirmation modal globally */}
 

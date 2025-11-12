@@ -1,12 +1,22 @@
-import React, { createContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Crop, PixelCrop } from 'react-image-crop';
-import {
+import React, { createContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocation, useNavigate, matchPath } from 'react-router-dom';
+import type {
     User, Problem, Tag, Metric, Submission, DiscussionPost, DiscussionComment,
     Page, AuthMode, CurrentView, ConfirmModalState, LeaderboardEntry, Dataset, Role, Direction, UserProfile, NotificationPreferences, Education, WorkExperience
 } from '../types';
 import { API_BASE_URL, OWNER_ID } from '../api';
 import { getCroppedImg } from '../utils';
 import { format, parseISO, startOfDay, formatDistanceToNow, isValid } from 'date-fns';
+
+const derivePageFromPath = (pathname: string): Page => {
+    if (matchPath('/problem-editor', pathname)) return 'problem-editor';
+    if (matchPath('/my-submissions', pathname)) return 'my-submissions';
+    if (matchPath('/profile/:identifier', pathname) || pathname === '/profile') return 'profile';
+    if (matchPath('/admin', pathname)) return 'admin';
+    if (matchPath('/settings', pathname)) return 'settings';
+    if (matchPath('/problems/:problemId', pathname)) return 'problem-detail';
+    return 'problems';
+};
 
 // Define the shape of the context data
 interface AppContextType {
@@ -128,6 +138,9 @@ export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // Define the provider component
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const location = useLocation();
+    const routerNavigate = useNavigate();
+
     // --- STATE HOOKS ---
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [users, setUsers] = useState<User[]>([]);
@@ -138,7 +151,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [posts, setPosts] = useState<DiscussionPost[]>([]);
     const [comments, setComments] = useState<DiscussionComment[]>([]);
     const [leaderboardData, setLeaderboardData] = useState<{ [key: number]: LeaderboardEntry[] }>({});
-    const [page, setPage] = useState<Page>("problems");
+    const [page, setPage] = useState<Page>(() => derivePageFromPath(location.pathname));
     const [editingProblem, setEditingProblem] = useState<Problem | "new" | null>(null);
     const [currentView, setCurrentView] = useState<CurrentView>("loading");
     const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -168,6 +181,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
      const showToast = useCallback((message: string, type: 'success' | 'error' | 'info') => { setToastMessage(message); setToastType(type); setError(''); }, []);
      const clearToast = useCallback(() => { setToastMessage(null); setToastType(null); }, []);
 
+    // --- Sync route -> state ---
+    useEffect(() => {
+        const pathname = location.pathname;
+        const nextPage = derivePageFromPath(pathname);
+        if (page !== nextPage) {
+            setPage(nextPage);
+        }
+
+        const problemMatch = matchPath('/problems/:problemId', pathname);
+        if (problemMatch && problemMatch.params?.problemId) {
+            const problemId = Number(problemMatch.params.problemId);
+            if (!Number.isNaN(problemId)) {
+                const foundProblem = problems.find(p => p.id === problemId);
+                if (foundProblem) {
+                    if (!selectedProblem || selectedProblem.id !== foundProblem.id) {
+                        setSelectedProblem(foundProblem);
+                    }
+                } else if (!loading && problems.length > 0) {
+                    showToast(`Không tìm thấy bài toán ID ${problemId}.`, 'error');
+                    routerNavigate('/problems', { replace: true });
+                }
+            }
+        } else if (selectedProblem) {
+            setSelectedProblem(null);
+            setViewingPost(null);
+            setLeftPanelTab('description');
+            setRightPanelTab('leaderboard');
+        }
+
+        const profileMatch = matchPath('/profile/:identifier', pathname);
+        if (profileMatch && profileMatch.params?.identifier) {
+            const identifier = profileMatch.params.identifier;
+            let matchedUser: User | undefined;
+            const numericId = Number(identifier);
+            if (!Number.isNaN(numericId)) {
+                matchedUser = users.find(u => u.id === numericId);
+            } else {
+                matchedUser = users.find(u => u.username.toLowerCase() === identifier.toLowerCase());
+            }
+            if (matchedUser) {
+                if (viewingUserId !== matchedUser.id) {
+                    setViewingUserId(matchedUser.id);
+                }
+            } else if (!loading && users.length > 0) {
+                showToast(`Không tìm thấy người dùng \"${identifier}\".`, 'error');
+                routerNavigate('/problems', { replace: true });
+            }
+        } else if (matchPath('/profile', pathname)) {
+            if (currentUser && viewingUserId !== currentUser.id) {
+                setViewingUserId(currentUser.id);
+            }
+        } else if (viewingUserId !== null) {
+            setViewingUserId(null);
+        }
+    }, [location.pathname, page, problems, selectedProblem, loading, routerNavigate, showToast, users, viewingUserId, currentUser]);
+
+    const navigate = useCallback((targetPage: Page, targetId: number | string | null = null, replace: boolean = false) => {
+        let resolvedPage: Page = targetPage;
+        let path = '/problems';
+
+        const resetNonDetailState = () => {
+            setViewingPost(null);
+            setLeftPanelTab('description');
+            setRightPanelTab('leaderboard');
+        };
+
+        const fallbackToProblems = () => {
+            resolvedPage = 'problems';
+            path = '/problems';
+        };
+
+        switch (targetPage) {
+            case 'problem-detail': {
+                if (typeof targetId !== 'number') {
+                    showToast('ID bài toán không hợp lệ.', 'error');
+                    fallbackToProblems();
+                    break;
+                }
+                const problem = problems.find(p => p.id === targetId);
+                if (!problem) {
+                    showToast(`Không tìm thấy bài toán ID ${targetId}.`, 'error');
+                    fallbackToProblems();
+                    break;
+                }
+                setSelectedProblem(problem);
+                resetNonDetailState();
+                path = `/problems/${targetId}`;
+                break;
+            }
+            case 'profile': {
+                let user: User | undefined;
+                if (typeof targetId === 'number') {
+                    user = users.find(u => u.id === targetId);
+                } else if (typeof targetId === 'string' && targetId.trim()) {
+                    user = users.find(u => u.username.toLowerCase() === targetId.toLowerCase());
+                } else if (currentUser) {
+                    user = currentUser;
+                }
+                if (!user) {
+                    showToast('Không tìm thấy người dùng.', 'error');
+                    fallbackToProblems();
+                    break;
+                }
+                setViewingUserId(user.id);
+                path = `/profile/${user.username}`;
+                break;
+            }
+            case 'problem-editor':
+                path = '/problem-editor';
+                break;
+            case 'my-submissions':
+                path = '/my-submissions';
+                break;
+            case 'admin':
+                path = '/admin';
+                break;
+            case 'settings':
+                path = '/settings';
+                break;
+            case 'problems':
+            default:
+                fallbackToProblems();
+                break;
+        }
+
+        if (resolvedPage !== 'problem-detail') {
+            setSelectedProblem(null);
+            resetNonDetailState();
+        }
+        if (resolvedPage !== 'profile') {
+            setViewingUserId(null);
+        }
+        if (resolvedPage !== 'problem-editor') {
+            setEditingProblem(null);
+        }
+
+        setPage(resolvedPage);
+        routerNavigate(path, { replace });
+    }, [problems, users, currentUser, showToast, routerNavigate]);
+
     // --- API HELPER ---
     const api = useMemo(() => {
         const request = async (endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: any) => {
@@ -189,16 +342,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // --- Leaderboard Calculation Effect ---
      useEffect(() => {
-         if (loading || !problems.length || !allMetrics.length) { return; }
-        const newLeaderboardData: { [key: number]: LeaderboardEntry[] } = {};
-        try { problems.forEach((problem) => { if (problem?.id === undefined || problem?.id === null) return; const problemSubmissions = submissions.filter(s => s.problemId === problem.id && s.status === 'succeeded' && typeof s.publicScore === 'number' && s.submittedAt); const primaryMetricLink = problem.metricsLinks?.find(link => link.isPrimary); const primaryMetricId = primaryMetricLink?.metricId; const metric = primaryMetricId !== undefined ? allMetrics.find(m => m.id === primaryMetricId) : undefined; if (!metric || problemSubmissions.length === 0) { newLeaderboardData[problem.id] = []; return; } const bestScores = new Map<number, Submission>(); problemSubmissions.forEach((sub) => { try { if (!sub.submittedAt || !isValid(parseISO(sub.submittedAt))) return; } catch { return; } const existingBest = bestScores.get(sub.userId); if (!existingBest || typeof existingBest.publicScore !== 'number' || !existingBest.submittedAt || !isValid(parseISO(existingBest.submittedAt))) { bestScores.set(sub.userId, sub); return; } const isNewScoreBetter = metric.direction === 'maximize' ? sub.publicScore! > existingBest.publicScore : sub.publicScore! < existingBest.publicScore; const areScoresEqual = sub.publicScore === existingBest.publicScore; const isEarlierSubmission = new Date(sub.submittedAt!).getTime() < new Date(existingBest.submittedAt).getTime(); if (isNewScoreBetter || (areScoresEqual && isEarlierSubmission)) { bestScores.set(sub.userId, sub); } }); const sortedEntries: LeaderboardEntry[] = Array.from(bestScores.values()).map(sub => ({ rank: 0, username: sub.username, score: sub.publicScore!, subId: sub.id, time: sub.submittedAt! })).sort((a, b) => { const scoreDiff = metric.direction === 'maximize' ? b.score - a.score : a.score - b.score; if (scoreDiff !== 0) return scoreDiff; return new Date(a.time).getTime() - new Date(b.time).getTime(); }); sortedEntries.forEach((entry, index) => { entry.rank = index + 1; }); newLeaderboardData[problem.id] = sortedEntries; }); setLeaderboardData(newLeaderboardData);
-        } catch (error) { console.error("Error calculating leaderboard:", error); showToast("Lỗi khi tính toán bảng xếp hạng.", "error"); setLeaderboardData({}); }
-     }, [submissions, problems, allMetrics, loading, showToast]);
+        if (loading || !problems.length || !allMetrics.length) { return; }
+       const newLeaderboardData: { [key: number]: LeaderboardEntry[] } = {};
+       try {
+            problems.forEach((problem) => {
+                if (problem?.id === undefined || problem?.id === null) return;
+                const problemSubmissions = submissions.filter(s => s.problemId === problem.id && s.status === 'succeeded' && typeof s.publicScore === 'number' && s.submittedAt);
+                if (problemSubmissions.length === 0) {
+                    newLeaderboardData[problem.id] = [];
+                    return;
+                }
+                const primaryMetricLink = problem.metricsLinks?.find(link => link.isPrimary);
+                const fallbackMetricId = Array.isArray(problem.metrics) && problem.metrics.length > 0 ? problem.metrics[0] : undefined;
+                const primaryMetricId = primaryMetricLink?.metricId ?? fallbackMetricId;
+                const metric = primaryMetricId !== undefined ? allMetrics.find(m => m.id === primaryMetricId) : undefined;
+                const metricDirection: Direction = metric?.direction || 'maximize';
+
+                const bestScores = new Map<number, Submission>();
+                problemSubmissions.forEach((sub) => {
+                    try {
+                        if (!sub.submittedAt || !isValid(parseISO(sub.submittedAt))) return;
+                    } catch {
+                        return;
+                    }
+                    const existingBest = bestScores.get(sub.userId);
+                    if (!existingBest || typeof existingBest.publicScore !== 'number' || !existingBest.submittedAt || !isValid(parseISO(existingBest.submittedAt))) {
+                        bestScores.set(sub.userId, sub);
+                        return;
+                    }
+                    const isNewScoreBetter = metricDirection === 'maximize'
+                        ? sub.publicScore! > existingBest.publicScore
+                        : sub.publicScore! < existingBest.publicScore;
+                    const areScoresEqual = sub.publicScore === existingBest.publicScore;
+                    const isEarlierSubmission = new Date(sub.submittedAt!).getTime() < new Date(existingBest.submittedAt).getTime();
+                    if (isNewScoreBetter || (areScoresEqual && isEarlierSubmission)) {
+                        bestScores.set(sub.userId, sub);
+                    }
+                });
+
+                const sortedEntries: LeaderboardEntry[] = Array.from(bestScores.values())
+                    .map(sub => ({ rank: 0, username: sub.username, score: sub.publicScore!, subId: sub.id, time: sub.submittedAt! }))
+                    .sort((a, b) => {
+                        const scoreDiff = metricDirection === 'maximize' ? b.score - a.score : a.score - b.score;
+                        if (scoreDiff !== 0) return scoreDiff;
+                        return new Date(a.time).getTime() - new Date(b.time).getTime();
+                    });
+                sortedEntries.forEach((entry, index) => { entry.rank = index + 1; });
+                newLeaderboardData[problem.id] = sortedEntries;
+            });
+            setLeaderboardData(newLeaderboardData);
+       } catch (error) { console.error("Error calculating leaderboard:", error); showToast("Lỗi khi tính toán bảng xếp hạng.", "error"); setLeaderboardData({}); }
+    }, [submissions, problems, allMetrics, loading, showToast]);
 
     // --- Auth Handlers ---
-     const handleSignup = useCallback(async (username: string, email: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/signup', { username, email, password }); setCurrentUser(data.user); await fetchAllData(); setCurrentView('main'); setPage('problems'); showToast(`Chào mừng ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, showToast, setLoading, setCurrentUser, setCurrentView, setPage]);
-     const handleLogin = useCallback(async (credential: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/login', { credential, password }); setCurrentUser(data.user); await fetchAllData(); setCurrentView('main'); setPage('problems'); showToast(`Chào mừng trở lại, ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, showToast, setLoading, setCurrentUser, setCurrentView, setPage]);
-     const handleLogout = useCallback(async () => { setLoading(true); try { await api.post('/auth/logout', {}); setCurrentUser(null); setUsers([]); setProblems([]); setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({}); setSelectedProblem(null); setViewingUserId(null); setCurrentView('auth'); setPage('problems'); setError(''); showToast("Đã đăng xuất.", 'info'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, showToast, setLoading, setCurrentUser, setUsers, setProblems, setSubmissions, setPosts, setComments, setLeaderboardData, setSelectedProblem, setViewingUserId, setCurrentView, setPage, setError]);
+     const handleSignup = useCallback(async (username: string, email: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/signup', { username, email, password }); setCurrentUser(data.user); await fetchAllData(); setCurrentView('main'); navigate('problems', null, true); showToast(`Chào mừng ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, showToast, setLoading, setCurrentUser, setCurrentView, navigate]);
+     const handleLogin = useCallback(async (credential: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/login', { credential, password }); setCurrentUser(data.user); await fetchAllData(); setCurrentView('main'); navigate('problems', null, true); showToast(`Chào mừng trở lại, ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, showToast, setLoading, setCurrentUser, setCurrentView, navigate]);
+     const handleLogout = useCallback(async () => { setLoading(true); try { await api.post('/auth/logout', {}); setCurrentUser(null); setUsers([]); setProblems([]); setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({}); setSelectedProblem(null); setViewingUserId(null); setCurrentView('auth'); setError(''); showToast("Đã đăng xuất.", 'info'); routerNavigate('/problems', { replace: true }); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, showToast, setLoading, setCurrentUser, setUsers, setProblems, setSubmissions, setPosts, setComments, setLeaderboardData, setSelectedProblem, setViewingUserId, setCurrentView, setError, routerNavigate]);
 
      // --- Initial Session Check & Data Load ---
      useEffect(() => {
@@ -206,8 +405,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
      }, [api, fetchAllData]);
 
     // --- Navigation Function ---
-    const navigate = useCallback((targetPage: Page, targetId: number | string | null = null, replace: boolean = false) => { console.log(`Navigating to page: ${targetPage}, ID: ${targetId}`); if (targetPage !== 'problem-detail') setSelectedProblem(null); if (targetPage !== 'profile') setViewingUserId(null); if (targetPage !== 'problem-editor') setEditingProblem(null); if (targetPage !== 'problem-detail') setViewingPost(null); if (targetPage !== 'problem-detail') setLeftPanelTab('description'); if (targetPage !== 'problem-detail') setRightPanelTab('leaderboard'); if (targetPage === 'problem-detail' && typeof targetId === 'number') { const problem = problems.find(p => p.id === targetId); if (problem) { console.log(`Setting selected problem: ${problem.name}`); setSelectedProblem(problem); } else { showToast(`Không tìm thấy bài toán ID ${targetId}.`, 'error'); console.warn(`Problem ID ${targetId} not found, redirecting to problems list.`); targetPage = 'problems'; setSelectedProblem(null); } } else if (targetPage === 'profile' && targetId !== null) { let userToViewId: number | null = null; if (typeof targetId === 'number') { const foundUser = users.find(u => u.id === targetId); userToViewId = foundUser?.id ?? null; console.log(`Searching for user ID ${targetId}, found: ${foundUser?.username}`); } else if (typeof targetId === 'string') { const foundUser = users.find(u => u.username.toLowerCase() === targetId.toLowerCase()); userToViewId = foundUser?.id ?? null; console.log(`Searching for username "${targetId}", found: ${foundUser?.username}`); } if (userToViewId !== null) { console.log(`Setting viewing user ID: ${userToViewId}`); setViewingUserId(userToViewId); } else { showToast(`Không tìm thấy người dùng "${targetId}".`, 'error'); console.warn(`User "${targetId}" not found, redirecting to problems list.`); targetPage = 'problems'; setViewingUserId(null); } } console.log(`Final target page: ${targetPage}`); setPage(targetPage); }, [problems, users, setPage, setSelectedProblem, setViewingUserId, setEditingProblem, setViewingPost, setLeftPanelTab, setRightPanelTab, showToast]);
-
 
     // --- Problem Handlers ---
     const handleSaveProblem = useCallback(async ( problemData: Partial<Problem> & { evaluationScriptContent: string }, tagIds: number[], metricIds: number[], files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null } ) => { if (!currentUser) { showToast("Bạn cần đăng nhập để lưu bài toán.", "error"); return; } setLoading(true); setError(''); try { console.log("Preparing FormData for problem save..."); const formData = new FormData(); const dataToSend = { ...problemData, tagIds, metricIds, existingDatasets: (editingProblem !== 'new' && editingProblem?.datasets) ? editingProblem.datasets : [], }; formData.append('problemData', JSON.stringify(dataToSend)); console.log("Appended problemData:", dataToSend); if (files.trainFile) { formData.append('trainCsv', files.trainFile); console.log(`Appending trainCsv: ${files.trainFile.name}`); } if (files.testFile) { formData.append('testCsv', files.testFile); console.log(`Appending testCsv: ${files.testFile.name}`); } if (files.groundTruthFile) { formData.append('groundTruthCsv', files.groundTruthFile); console.log(`Appending groundTruthCsv: ${files.groundTruthFile.name}`); } let savedProblemData; if (editingProblem === 'new') { console.log("Calling API: POST /problems"); if (!files.trainFile || !files.testFile || !files.groundTruthFile) { throw new Error("Vui lòng tải lên đủ file train, test (public), và ground truth cho bài toán mới."); } savedProblemData = await api.post('/problems', formData); showToast("Tạo bài toán thành công!", "success"); } else if (editingProblem) { console.log(`Calling API: PUT /problems/${editingProblem.id}`); if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) { throw new Error("Không được phép chỉnh sửa bài toán này."); } const needsGT = !files.groundTruthFile && !editingProblem.hasGroundTruth; if(needsGT) { console.warn("Update needs ground truth, but no file provided and none exists."); } savedProblemData = await api.put(`/problems/${editingProblem.id}`, formData); showToast("Cập nhật bài toán thành công!", "success"); } else { throw new Error("Trạng thái chỉnh sửa không hợp lệ."); } console.log("Problem save successful, fetching all data..."); await fetchAllData(); const newProblemId = savedProblemData?.problem?.id; console.log("Data refetched. Navigating..."); if (newProblemId !== undefined) { navigate('problem-detail', newProblemId); } else { console.warn("Saved problem data missing ID, navigating to list."); navigate('problems'); } setEditingProblem(null); } catch (e: any) { console.error("Save Problem Error:", e); } finally { setLoading(false); } }, [api, currentUser, editingProblem, fetchAllData, showToast, setLoading, setEditingProblem, navigate, setError]);
@@ -380,7 +577,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 
     // --- Hint Handler ---
-    const handleGetHint = useCallback(async () => { if (!selectedProblem) return; const prompt = `Give a concise hint (max 2-3 sentences, focus on approach, not code) for the machine learning problem: ${selectedProblem.name}. Problem description summary: ${selectedProblem.content.replace(/<[^>]*>/g, '').substring(0, 300)}...`; setIsGeneratingHint(true); setProblemHint(null); setError(''); try { const apiKey = ""; const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`; const payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 100 } }; const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); if (!response.ok) { const errorData = await response.json(); throw new Error(errorData?.error?.message || `API call failed: ${response.status}`); } const result = await response.json(); const text = result.candidates?.[0]?.content?.parts?.[0]?.text; if (!text) throw new Error("Không nhận được gợi ý."); setProblemHint(text.trim()); } catch (e: any) { showToast(`Lỗi gợi ý: ${e.message}`, 'error'); console.error("Hint Error:", e); } finally { setIsGeneratingHint(false); } }, [selectedProblem, showToast, setIsGeneratingHint, setProblemHint, setError]);
+    const handleGetHint = useCallback(async () => {
+        if (!selectedProblem) return;
+        if (!currentUser) {
+            showToast("Bạn cần đăng nhập để nhận gợi ý.", "error");
+            return;
+        }
+        setIsGeneratingHint(true);
+        setProblemHint(null);
+        setError('');
+        try {
+            const data = await api.post(`/problems/${selectedProblem.id}/hint`);
+            if (!data?.hint) {
+                throw new Error("Không nhận được gợi ý.");
+            }
+            setProblemHint(data.hint);
+        } catch (e: any) {
+            showToast(`Lỗi gợi ý: ${e.message || 'Không thể tạo gợi ý lúc này.'}`, 'error');
+            console.error("Hint Error:", e);
+        } finally {
+            setIsGeneratingHint(false);
+        }
+    }, [selectedProblem, currentUser, api, showToast]);
 
     // --- Dataset Download ---
     const downloadDataset = useCallback((content: string | undefined, filename: string) => { if (!content) { showToast(`Nội dung cho file "${filename}" không có sẵn để tải về.`, "error"); return; } try { const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.setAttribute('download', filename); document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); } catch (e) { console.error("Download error:", e); showToast("Lỗi tải dataset.", "error"); } }, [showToast]);

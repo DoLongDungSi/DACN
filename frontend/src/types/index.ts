@@ -80,6 +80,7 @@ export interface Dataset {
     split: 'train' | 'public_test' | 'private_test' | string; // Allow custom splits, but define common ones
     filename: string;
     content?: string; // Content might be stored elsewhere in production
+    downloadUrl?: string;
     // Add other metadata like size, rows, columns if needed
 }
 

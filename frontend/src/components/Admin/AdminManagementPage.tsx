@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import { Tag, Metric, Direction } from '../../types';
+import type { Tag, Metric, Direction } from '../../types';
 
 interface AdminManagementPageProps {
     allTags: Tag[];

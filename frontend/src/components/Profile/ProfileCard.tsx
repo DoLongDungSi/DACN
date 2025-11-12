@@ -1,7 +1,7 @@
 import React from 'react';
 import { Globe, Github, Linkedin, Twitter } from 'lucide-react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
-import { User } from '../../types';
+import type { User } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 
 interface ProfileCardProps {

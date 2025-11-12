@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'; // Added useState, useMemo
 import { Edit2, Trash2, PlusCircle, Search, Tag as TagIcon, X } from 'lucide-react'; // Added Search, TagIcon, X
 import { useAppContext } from '../hooks/useAppContext';
-import { Problem, Tag } from '../types'; // Added Tag type
+import type { Problem, Tag } from '../types'; // Added Tag type
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 
 export const ProblemsListPage: React.FC = () => {
@@ -9,12 +9,12 @@ export const ProblemsListPage: React.FC = () => {
         problems,
         allTags,
         currentUser,
-        setPage,
         setSelectedProblem,
         setEditingProblem,
         handleDeleteProblem,
         setViewingPost,
         loading,
+        navigate,
     } = useAppContext();
 
     // --- State for Filtering ---
@@ -24,16 +24,16 @@ export const ProblemsListPage: React.FC = () => {
     const [showTagFilterDropdown, setShowTagFilterDropdown] = useState(false);
 
     const handleProblemClick = (problem: Problem) => {
-         setSelectedProblem(problem);
-         setPage("problem-detail");
-         setViewingPost(null);
-     }
+        setSelectedProblem(problem);
+        setViewingPost(null);
+        navigate('problem-detail', problem.id);
+    }
 
      const handleEditClick = (e: React.MouseEvent, problem: Problem) => {
          e.stopPropagation();
          if (currentUser?.role === 'owner' || problem.authorId === currentUser?.id) {
-             setEditingProblem(problem);
-             setPage("problem-editor");
+            setEditingProblem(problem);
+            navigate('problem-editor');
          } else {
              console.warn("User not authorized to edit this problem.");
          }
@@ -103,7 +103,7 @@ export const ProblemsListPage: React.FC = () => {
                 <h1 className="text-3xl font-bold text-slate-900">Danh sách bài toán</h1>
                 {canCreate && (
                     <button
-                        onClick={() => { setEditingProblem("new"); setPage('problem-editor'); }}
+                        onClick={() => { setEditingProblem("new"); navigate('problem-editor'); }}
                         className="w-full sm:w-auto bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold py-2.5 px-5 rounded-lg flex items-center justify-center hover:from-blue-700 hover:to-purple-700 transition-all shadow-md hover:shadow-lg text-sm flex-shrink-0" // Added flex-shrink-0
                         >
                         <PlusCircle className="mr-2 h-4 w-4" />
@@ -201,7 +201,7 @@ export const ProblemsListPage: React.FC = () => {
                     {/* Keep the create button for the absolute empty state */}
                     {problems.length === 0 && canCreate && (
                          <button
-                            onClick={() => { setEditingProblem("new"); setPage('problem-editor'); }}
+                            onClick={() => { setEditingProblem("new"); navigate('problem-editor'); }}
                             className="bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center hover:from-blue-700 hover:to-purple-700 transition-all shadow-md hover:shadow-lg text-sm mx-auto"
                             >
                             <PlusCircle className="mr-2 h-4 w-4" />

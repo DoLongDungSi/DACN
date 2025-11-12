@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css'; // Import KaTeX CSS
-import { Problem, Tag, Metric, Difficulty, ProblemType } from '../../types';
+import type { Problem, Tag, Metric, Difficulty, ProblemType } from '../../types';
 import { LoadingSpinner } from '../Common/LoadingSpinner';
 import { Info, Tag as TagIcon, BarChart3, Upload, FileText, X, Plus, Check, Eye, EyeOff, FileCode2, FileUp } from 'lucide-react';
 

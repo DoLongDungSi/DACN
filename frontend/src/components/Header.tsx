@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User as UserIcon, LogOut, FileText, ChevronDown, Settings, Shield, PlusCircle } from "lucide-react";
 import { useAppContext } from '../hooks/useAppContext';
+import type { Page } from '../types';
 import { UserAvatar } from './Common/UserAvatar';
 
 export const Header: React.FC = () => {
-    const { currentUser, page, setPage, handleLogout, setViewingUserId, setEditingProblem } = useAppContext();
+    const { currentUser, page, navigate, handleLogout, setEditingProblem } = useAppContext();
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -22,18 +23,14 @@ export const Header: React.FC = () => {
     }, []);
 
 
-    const navigate = (targetPage: typeof page) => {
-        setPage(targetPage);
-        setDropdownOpen(false); // Close dropdown on navigation
-        // Reset specific states if needed
-        if (targetPage !== 'profile') setViewingUserId(null);
-        if (targetPage !== 'problem-editor') setEditingProblem(null);
+    const handleNavigate = (targetPage: Page, targetId?: number | string | null) => {
+        navigate(targetPage, targetId ?? null);
+        setDropdownOpen(false);
     };
 
     const handleViewProfile = () => {
         if (currentUser) {
-             setViewingUserId(currentUser.id); // Set viewing user to current user
-             navigate('profile');
+            handleNavigate('profile', currentUser.username);
         }
     }
 
@@ -41,19 +38,19 @@ export const Header: React.FC = () => {
          <header className="bg-white shadow-sm sticky top-0 z-40">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                 <div className="flex items-center space-x-8">
-                    <button onClick={() => navigate('problems')} className="flex items-center space-x-2">
+                    <button onClick={() => handleNavigate('problems')} className="flex items-center space-x-2">
                         <span className="text-2xl font-bold text-indigo-600"><img src="/mljudge-logo.svg" alt="MLJudge Logo" className="h-8 w-8 mr-2" /></span>
                     </button>
                     <nav className="hidden md:flex space-x-2 items-center">
                         <button
-                            onClick={() => navigate('problems')}
+                            onClick={() => handleNavigate('problems')}
                             className={`font-semibold px-4 py-2 rounded-lg ${page === 'problems' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600 hover:text-indigo-600 hover:bg-slate-100'}`}
                         >
                             Bài toán
                         </button>
                          {currentUser?.role === "owner" && (
                             <button
-                                onClick={() => navigate('admin')}
+                                onClick={() => handleNavigate('admin')}
                                 className={`font-semibold px-4 py-2 rounded-lg flex items-center ${page === 'admin' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600 hover:text-indigo-600 hover:bg-slate-100'}`}
                             >
                                 <Shield className="w-5 h-5 mr-2" />
@@ -64,7 +61,7 @@ export const Header: React.FC = () => {
                             <button
                                 onClick={() => {
                                     setEditingProblem("new");
-                                    navigate('problem-editor');
+                                    handleNavigate('problem-editor');
                                 }}
                                 className="bg-indigo-600 text-white font-bold py-2 px-3 rounded-lg flex items-center hover:bg-indigo-700 transition-colors shadow-sm text-sm"
                                 >
@@ -96,14 +93,14 @@ export const Header: React.FC = () => {
                                     Hồ sơ
                                 </button>
                                 <button
-                                    onClick={() => navigate('my-submissions')}
+                                    onClick={() => handleNavigate('my-submissions')}
                                     className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center"
                                 >
                                     <FileText className="w-5 h-5 mr-3" />
                                     Bài nộp
                                 </button>
                                 <button
-                                     onClick={() => navigate('settings')}
+                                     onClick={() => handleNavigate('settings')}
                                      className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center"
                                 >
                                     <Settings className="w-5 h-5 mr-3" />

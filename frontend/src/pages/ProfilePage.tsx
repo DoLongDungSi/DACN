@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo } from 'react';
-import { Briefcase, GraduationCap, Award, Activity } from 'lucide-react'; // Added Award, Activity icons
+import { Briefcase, GraduationCap, Award, Activity, Globe, Github, Linkedin, Twitter, MapPin, Mail } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, parseISO, formatDistanceToNow, startOfDay } from 'date-fns';
 import { useAppContext } from '../hooks/useAppContext';
-import { Submission, LeaderboardEntry, Education, WorkExperience, User } from '../types';
-import { ProfileCard } from '../components/Profile/ProfileCard';
-import { LoadingSpinner } from '../components/Common/LoadingSpinner'; // Import LoadingSpinner
+import type { Submission, LeaderboardEntry, Education, WorkExperience, User } from '../types';
+import { UserAvatar } from '../components/Common/UserAvatar';
+import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 
 export const ProfilePage: React.FC = () => {
     const {
@@ -95,6 +95,11 @@ export const ProfilePage: React.FC = () => {
     }, [profileUser, users, submissions, leaderboardData, problems.length]); // Dependencies
 
 
+    const formatLink = (url?: string | null) => {
+        if (!url) return null;
+        return url.startsWith('http') ? url : `https://${url}`;
+    };
+
     // Display loading state or if user not found yet
      if (loading || !profileUser) {
         return (
@@ -107,6 +112,18 @@ export const ProfilePage: React.FC = () => {
 
     // Safely access profile data
     const profile = profileUser.profile || {};
+    const joinLabel = profileUser.joinedAt ? formatDistanceToNow(parseISO(profileUser.joinedAt), { addSuffix: true }) : 'không rõ';
+    const socialLinks = [
+        { label: 'Website', icon: Globe, url: formatLink(profile.website) },
+        { label: 'GitHub', icon: Github, url: formatLink(profile.github) },
+        { label: 'LinkedIn', icon: Linkedin, url: formatLink(profile.linkedin) },
+        { label: 'Twitter', icon: Twitter, url: formatLink(profile.twitter) },
+    ].filter(link => link.url);
+    const statCards = [
+        { label: 'Bài đã giải', value: stats?.solvedProblems ?? 0, suffix: ` / ${problems.length}` },
+        { label: 'Lượt nộp', value: stats?.totalSubmissions ?? 0 },
+        { label: 'Hạng cao nhất', value: stats?.bestRank ?? '-' },
+    ];
     // Sort Education/Work Experience (example: newest first based on duration end year)
     const sortTimeline = (a: Education | WorkExperience, b: Education | WorkExperience) => {
         const getYear = (duration: string | undefined) => {
@@ -123,109 +140,165 @@ export const ProfilePage: React.FC = () => {
 
 
     return (
-        // Adjusted grid layout: lg:grid-cols-3 -> lg:grid-cols-4
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-            {/* Left Column (Profile Card + Skills) - Takes 1 column */}
-            <div className="lg:col-span-1 space-y-8">
-                 <ProfileCard profileUser={profileUser} />
-
-                 {profile.skills && profile.skills.length > 0 && (
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
-                        <h3 className="font-bold text-lg mb-4 text-slate-800">Kỹ năng</h3>
-                        <div className="flex flex-wrap gap-2">
-                            {profile.skills.map((skill: string, index: number) => ( // Added index for key
-                                <span key={`${skill}-${index}`} className="skill-tag"> {skill} </span>
+        <div className="-m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8 bg-gradient-to-br from-slate-50 via-white to-indigo-50">
+            <div className="max-w-7xl mx-auto space-y-8">
+                <section className="bg-white rounded-2xl shadow-xl border border-slate-200 p-6 sm:p-8">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                        <div className="flex items-center gap-5">
+                            <UserAvatar user={profileUser} size="w-24 h-24" textClass="text-3xl" />
+                            <div>
+                                <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{profile.realName || profileUser.username}</h1>
+                                <p className="text-slate-500">@{profileUser.username}</p>
+                                <p className="text-sm text-slate-400">Tham gia {joinLabel}</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-1 flex-wrap gap-4 justify-start lg:justify-end">
+                            {statCards.map(card => (
+                                <div key={card.label} className="stats-card min-w-[140px] flex-1">
+                                    <p className="stats-label">{card.label}</p>
+                                    <p className="stats-value">
+                                        {card.value}
+                                        {card.suffix && <span className="stats-total">{card.suffix}</span>}
+                                    </p>
+                                </div>
                             ))}
                         </div>
                     </div>
-                )}
-                 {/* Placeholder for Languages if needed */}
-                 {/* <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
-                    <h3 className="font-bold text-lg mb-4 text-slate-800">Ngôn ngữ</h3>
-                     {/* ... language list ... */}
-                 {/* </div> */}
-            </div>
+                    {profile.summary && (
+                        <p className="mt-6 text-slate-600 leading-relaxed">
+                            {profile.summary}
+                        </p>
+                    )}
+                </section>
 
-            {/* Right Column (Stats, Activity, Education, Work, Achievements) - Takes 3 columns */}
-            <div className="lg:col-span-3 space-y-8">
-                {/* Stats Cards - Removed Success Rate */}
-                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6"> {/* Changed to 3 columns */}
-                     <div className="stats-card"> <h4 className="stats-label">Đã giải</h4> <p className="stats-value">{stats?.solvedProblems ?? 0}<span className="stats-total"> / {problems.length}</span></p> </div>
-                     <div className="stats-card"> <h4 className="stats-label">Lượt nộp</h4> <p className="stats-value">{stats?.totalSubmissions ?? 0}</p> </div>
-                     <div className="stats-card"> <h4 className="stats-label">Hạng cao nhất</h4> <p className="stats-value">{stats?.bestRank ?? '-'}</p> </div>
-                     {/* Removed Success Rate Card */}
-                 </div>
+                <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="space-y-6">
+                        <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
+                            <h3 className="font-bold text-lg mb-4 text-slate-800">Thông tin</h3>
+                            <ul className="space-y-3 text-sm text-slate-600">
+                                {profile.country && (
+                                    <li className="flex items-center gap-2">
+                                        <MapPin className="w-4 h-4 text-indigo-500" />
+                                        {profile.country}
+                                    </li>
+                                )}
+                                {profile.allowJobContact && profileUser.email && (
+                                    <li className="flex items-center gap-2">
+                                        <Mail className="w-4 h-4 text-indigo-500" />
+                                        <a href={`mailto:${profileUser.email}`} className="hover:underline">{profileUser.email}</a>
+                                    </li>
+                                )}
+                                {profile.gender && (
+                                    <li className="flex items-center gap-2">
+                                        <span className="font-semibold text-slate-700">Giới tính:</span>
+                                        <span>{profile.gender}</span>
+                                    </li>
+                                )}
+                            </ul>
+                        </div>
 
-                {/* Activity Chart */}
-                 {stats?.activityData && stats.activityData.length > 0 && (
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
-                         <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center">
-                            <Activity className="w-5 h-5 mr-2 text-indigo-600"/>
-                            Lịch sử hoạt động
-                        </h3>
-                        <ResponsiveContainer width="100%" height={150}> {/* Reduced height slightly */}
-                            <LineChart data={stats.activityData} margin={{ top: 5, right: 20, left: -15, bottom: 5 }}>
-                                <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" dy={5}/>
-                                <YAxis allowDecimals={false} fontSize={10} tickLine={false} axisLine={false} width={30}/>
-                                <Tooltip
-                                    contentStyle={{ fontSize: '11px', borderRadius: '6px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0', padding: '4px 8px' }} // Adjusted style
-                                    itemStyle={{ color: '#4f46e5' }}
-                                    labelStyle={{ color: '#64748b', fontSize: '10px' }} // Adjusted style
-                                    labelFormatter={(label, payload) => payload?.[0]?.payload.isoDate ? format(parseISO(payload[0].payload.isoDate), 'MMM dd, yyyy') : label }
-                                    formatter={(value: number) => [`${value} bài`, 'Nộp']} // Custom formatter
-                                 />
-                                <Line type="monotone" dataKey="submissions" stroke="#4f46e5" strokeWidth={2} dot={stats.activityData.length < 60 ? { r: 3, fill: '#818cf8' } : false} activeDot={{ r: 5, stroke: '#fff', strokeWidth: 2, fill: '#4f46e5' }} name="Bài nộp" />
-                            </LineChart>
-                        </ResponsiveContainer>
+                        {profile.skills && profile.skills.length > 0 && (
+                            <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
+                                <h3 className="font-bold text-lg mb-4 text-slate-800">Kỹ năng</h3>
+                                <div className="flex flex-wrap gap-2">
+                                    {profile.skills.map((skill: string, index: number) => (
+                                        <span key={`${skill}-${index}`} className="skill-tag">{skill}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {socialLinks.length > 0 && (
+                            <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
+                                <h3 className="font-bold text-lg mb-4 text-slate-800">Liên kết</h3>
+                                <div className="flex flex-wrap gap-3">
+                                    {socialLinks.map(link => (
+                                        <a
+                                            key={link.label}
+                                            href={link.url!}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:border-indigo-400 hover:text-indigo-600 transition-colors"
+                                        >
+                                            <link.icon className="w-4 h-4" />
+                                            {link.label}
+                                        </a>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
-                )}
 
-                 {/* Education */}
-                 {sortedEducation.length > 0 && (
-                     <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
-                         <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center"> <GraduationCap className="icon"/> Học vấn </h3>
-                         <ul className="space-y-4">
-                              {/* Ensure unique key */}
-                             {sortedEducation.map((edu: Education, index: number) => ( <li key={edu.id ?? `edu-${index}`} className="item-detail"> <p className="font-semibold text-slate-700">{edu.degree || 'N/A'} - {edu.school || 'N/A'}</p> <p className="text-slate-500 text-xs">{edu.duration || 'N/A'}</p> </li> ))}
-                         </ul>
-                     </div>
-                 )}
+                    <div className="lg:col-span-2 space-y-6">
+                        {stats?.activityData && stats.activityData.length > 0 && (
+                            <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
+                                <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center">
+                                    <Activity className="w-5 h-5 mr-2 text-indigo-600" />
+                                    Lịch sử hoạt động
+                                </h3>
+                                <ResponsiveContainer width="100%" height={180}>
+                                    <LineChart data={stats.activityData} margin={{ top: 5, right: 20, left: -15, bottom: 5 }}>
+                                        <XAxis dataKey="date" fontSize={11} tickLine={false} axisLine={false} dy={8} />
+                                        <YAxis allowDecimals={false} fontSize={11} tickLine={false} axisLine={false} width={35} />
+                                        <Tooltip
+                                            contentStyle={{ fontSize: '11px', borderRadius: '6px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', border: '1px solid #e2e8f0', padding: '4px 8px' }}
+                                            itemStyle={{ color: '#4f46e5' }}
+                                            labelStyle={{ color: '#64748b', fontSize: '11px' }}
+                                            labelFormatter={(_, payload) => payload?.[0]?.payload.isoDate ? format(parseISO(payload[0].payload.isoDate), 'MMM dd, yyyy') : ''}
+                                            formatter={(value: number) => [`${value} bài`, 'Nộp']}
+                                        />
+                                        <Line type="monotone" dataKey="submissions" stroke="#4f46e5" strokeWidth={2} dot={stats.activityData.length < 60 ? { r: 3, fill: '#818cf8' } : false} activeDot={{ r: 5, stroke: '#fff', strokeWidth: 2, fill: '#4f46e5' }} name="Bài nộp" />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+                        )}
 
-                 {/* Work Experience */}
-                 {sortedWorkExperience.length > 0 && (
-                     <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
-                         <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center"> <Briefcase className="icon"/> Kinh nghiệm làm việc </h3>
-                         <ul className="space-y-4">
-                             {/* Ensure unique key */}
-                             {sortedWorkExperience.map((work: WorkExperience, index: number) => ( <li key={work.id ?? `work-${index}`} className="item-detail"> <p className="font-semibold text-slate-700">{work.title || 'N/A'} - {work.company || 'N/A'}</p> <p className="text-slate-500 text-xs">{work.duration || 'N/A'}</p> </li> ))}
-                         </ul>
-                     </div>
-                 )}
+                        {sortedEducation.length > 0 && (
+                            <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
+                                <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center"> <GraduationCap className="icon" /> Học vấn </h3>
+                                <ul className="space-y-4">
+                                    {sortedEducation.map((edu: Education, index: number) => (
+                                        <li key={edu.id ?? `edu-${index}`} className="item-detail">
+                                            <p className="font-semibold text-slate-700">{edu.degree || 'N/A'} - {edu.school || 'N/A'}</p>
+                                            <p className="text-slate-500 text-xs">{edu.duration || 'N/A'}</p>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
 
-                 {/* Achievements Placeholder */}
-                 <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
-                    <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center">
-                        <Award className="icon"/>
-                        Thành tích
-                     </h3>
-                    <p className="text-sm text-slate-500 italic">
-                        (Tính năng thành tích/huy hiệu chưa được cài đặt. Dữ liệu sẽ được hiển thị ở đây trong tương lai.)
-                        {/* Example structure if data existed: */}
-                        {/* <div className="grid grid-cols-3 gap-4">
-                            <div className="flex flex-col items-center p-3 bg-yellow-50 border border-yellow-200 rounded-lg"> <Star className="w-8 h-8 text-yellow-500 mb-1"/> <span className="text-xs font-medium text-yellow-700">Top 10%</span> </div>
-                            <div className="flex flex-col items-center p-3 bg-slate-50 border border-slate-200 rounded-lg"> <Medal className="w-8 h-8 text-slate-500 mb-1"/> <span className="text-xs font-medium text-slate-700">5 Problems Solved</span> </div>
-                        </div> */}
-                    </p>
-                </div>
+                        {sortedWorkExperience.length > 0 && (
+                            <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
+                                <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center"> <Briefcase className="icon" /> Kinh nghiệm làm việc </h3>
+                                <ul className="space-y-4">
+                                    {sortedWorkExperience.map((work: WorkExperience, index: number) => (
+                                        <li key={work.id ?? `work-${index}`} className="item-detail">
+                                            <p className="font-semibold text-slate-700">{work.title || 'N/A'} - {work.company || 'N/A'}</p>
+                                            <p className="text-slate-500 text-xs">{work.duration || 'N/A'}</p>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
 
+                        <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
+                            <h3 className="font-bold text-lg mb-4 text-slate-800 flex items-center">
+                                <Award className="icon" />
+                                Thành tích
+                            </h3>
+                            <p className="text-sm text-slate-500 italic">
+                                Tính năng thành tích/huy hiệu sẽ sớm xuất hiện tại đây. Hãy tiếp tục chinh phục các bài toán để mở khóa danh hiệu!
+                            </p>
+                        </div>
+                    </div>
+                </section>
             </div>
-             {/* Styles */}
              <style>{`
                 .skill-tag { background-color: #eef2ff; color: #4338ca; font-size: 0.75rem; font-weight: 500; padding: 0.25rem 0.75rem; border-radius: 9999px; border: 1px solid #c7d2fe; }
                 .stats-card { background-color: white; border-radius: 0.75rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); padding: 1rem 1.25rem; border: 1px solid #e2e8f0; text-align: center; }
                 .stats-label { font-weight: 500; color: #64748b; font-size: 0.75rem; line-height: 1rem; margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.05em; }
-                .stats-value { font-size: 1.5rem; line-height: 2rem; font-weight: 700; color: #1e293b; display: flex; align-items: baseline; justify-content: center; }
-                .stats-total { font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; color: #94a3b8; margin-left: 0.25rem; }
+                .stats-value { font-size: 1.6rem; line-height: 2.25rem; font-weight: 700; color: #1e293b; display: flex; align-items: baseline; justify-content: center; column-gap: 0.35rem; }
+                .stats-total { font-size: 0.9rem; line-height: 1.25rem; font-weight: 500; color: #94a3b8; }
                 .icon { width: 1.125rem; height: 1.125rem; margin-right: 0.625rem; color: #4f46e5; flex-shrink: 0; }
                 .item-detail { font-size: 0.875rem; line-height: 1.25rem; position: relative; padding-left: 1.5rem; }
                 .item-detail::before { content: ''; position: absolute; left: 0.25rem; top: 0.25rem; bottom: 0.25rem; width: 2px; background-color: #c7d2fe; border-radius: 1px; }

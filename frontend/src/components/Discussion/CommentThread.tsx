@@ -1,7 +1,7 @@
 import React from 'react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { ArrowUp, ArrowDown, Edit3, Trash2 } from 'lucide-react'; // Added Edit3, Trash2
-import { DiscussionComment, User } from '../../types';
+import type { DiscussionComment, User } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { CommentForm } from './CommentForm';
 import { useAppContext } from '../../hooks/useAppContext';

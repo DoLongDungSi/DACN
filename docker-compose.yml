@@ -20,6 +20,8 @@ services:
         EVALUATION_SERVICE_URL: http://microservice:5002/evaluate 
         # PORT: 5001
         NODE_ENV: development
+        OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+        OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/auto}
       depends_on:
         db:
           condition: service_healthy
@@ -28,6 +30,7 @@ services:
       volumes:
          - ./backend:/usr/src/app
          - /usr/src/app/node_modules 
+         - ./test:/usr/src/test:ro
       command: npm start 
 
   microservice:

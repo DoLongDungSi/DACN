@@ -2,14 +2,13 @@ import React, { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { useAppContext } from '../hooks/useAppContext';
 import { ProblemEditorForm } from '../components/Problem/ProblemEditorForm';
-import { Problem } from '../types';
+import type { Problem } from '../types';
 import { api } from '../api';
 
 export const ProblemEditorPage: React.FC = () => {
     const {
         editingProblem,
         setEditingProblem,
-        setPage,
         allTags,
         allMetrics,
         loading,
@@ -18,6 +17,7 @@ export const ProblemEditorPage: React.FC = () => {
         fetchAllData, // To refresh data after save
         setError,
         showToast, // Use showToast for feedback
+        navigate,
     } = useAppContext();
 
     const isNew = editingProblem === "new";
@@ -81,8 +81,8 @@ export const ProblemEditorPage: React.FC = () => {
         }
 
         await fetchAllData();
-        setEditingProblem(undefined);
-        setPage('problems');
+        setEditingProblem(null);
+        navigate('problems');
     } catch (e: any) {
         const msg = e?.message || 'Lưu bài toán thất bại';
         setPageError(msg);
@@ -96,7 +96,7 @@ export const ProblemEditorPage: React.FC = () => {
 
     const handleCancel = () => {
          setEditingProblem(null);
-         setPage("problems");
+         navigate('problems');
          setError(""); // Clear potential errors when cancelling
          setPageError("");
      }

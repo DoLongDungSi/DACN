@@ -25,7 +25,6 @@ def fail_calc(path, msg):
     sys.exit(1)
 
 def find_pred_col(df):
-    # Ưu tiên các tên cột phổ biến; nếu không, chọn đúng 1 cột khác 'id'
     candidates = ["SalePrice", "prediction", "pred", "target", "y_pred"]
     for c in candidates:
         if c in df.columns:
@@ -34,14 +33,12 @@ def find_pred_col(df):
     return non_id[0] if len(non_id) == 1 else None
 
 def find_target_col(df):
-    # Ưu tiên "SalePrice"; nếu không, chọn đúng 1 cột khác 'id'
     if "SalePrice" in df.columns:
         return "SalePrice"
     non_id = [c for c in df.columns if c.lower() != "id"]
     return non_id[0] if len(non_id) == 1 else None
 
 def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
-    # 1) Đọc & kiểm tra submission
     try:
         sub = pd.read_csv(submission_path)
     except Exception as e:
@@ -57,7 +54,6 @@ def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
     if sub[pred_col].isnull().any():
         fail_format(output_path, f"Cột '{pred_col}' trong submission có NaN.")
 
-    # 2) Đọc & kiểm tra ground truth
     try:
         gt = pd.read_csv(ground_truth_path)
     except Exception as e:
@@ -70,7 +66,6 @@ def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
     if target_col is None:
         fail_calc(output_path, "Không xác định được cột target trong ground truth.")
 
-    # 3) Merge với suffix để tránh đụng tên cột
     try:
         merged = pd.merge(
             sub[["id", pred_col]],
@@ -85,7 +80,6 @@ def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
     if merged.empty:
         fail_calc(output_path, "Không có ID nào khớp giữa submission và ground truth.")
 
-    # 4) Tính RMSE bằng NumPy (không cần scikit-learn)
     y_true = pd.to_numeric(merged[f"{target_col}_gt"], errors="coerce")
     y_pred = pd.to_numeric(merged[f"{pred_col}_sub"], errors="coerce")
 
@@ -105,7 +99,6 @@ def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
 
 
 if __name__ == "__main__":
-    # Microservice gọi với 4 args; hỗ trợ 3 args để test local
     if len(sys.argv) == 5:
         _, sub_p, gt_p, pub_p, out_p = sys.argv
         evaluate(sub_p, gt_p, pub_p, out_p)
@@ -113,7 +106,6 @@ if __name__ == "__main__":
         _, sub_p, gt_p, out_p = sys.argv
         evaluate(sub_p, gt_p, None, out_p)
     else:
-        # Cố gắng ghi -1.0 nếu có output ở cuối
         out_p = sys.argv[-1] if len(sys.argv) >= 2 else "output.txt"
         try:
             write_score(out_p, -1.0)

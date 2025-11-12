@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
 import { api } from '../api';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
-import { AuthMode } from '../types';
+import type { AuthMode } from '../types';
 
 export const AuthPage: React.FC = () => {
     const { setCurrentUser, fetchAllData, setCurrentView, error, setError, loading, setLoading } = useAppContext();

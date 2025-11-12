@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { User, DiscussionPost, DiscussionComment } from '../../types';
+import type { User, DiscussionPost, DiscussionComment } from '../../types';
 
 interface UserAvatarProps {
   user: User | DiscussionPost | DiscussionComment | null; // Allow null

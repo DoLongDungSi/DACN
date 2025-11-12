@@ -4,7 +4,7 @@ import { formatDistanceToNow, parseISO, isValid } from 'date-fns';
 import ReactMarkdown from 'react-markdown'; // For rendering content preview
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { DiscussionPost, User } from '../../types';
+import type { DiscussionPost, User } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { useAppContext } from '../../hooks/useAppContext';
 import { LoadingSpinner } from '../Common/LoadingSpinner'; // Import LoadingSpinner

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { UserCog, KeyRound, Lock, Bell, Camera, Globe, Github, Linkedin, Twitter } from 'lucide-react';
 import { useAppContext } from '../hooks/useAppContext';
-import { User, UserProfile, NotificationPreferences, Education, WorkExperience } from '../types'; // Import Education, WorkExperience
+import type { User, UserProfile, NotificationPreferences, Education, WorkExperience } from '../types'; // Import Education, WorkExperience
 import { UserAvatar } from '../components/Common/UserAvatar';
 import { ChangePasswordModal } from '../components/Settings/ChangePasswordModal';
 import { AvatarCropModal } from '../components/Settings/AvatarCropModal';
@@ -13,9 +13,9 @@ export const SettingsPage: React.FC = () => {
     const {
         currentUser, setCurrentUser, users, setUsers, api, handleLogout,
         openConfirmModal, closeConfirmModal, setLoading, loading,
-        imgSrc, setImgSrc, crop, setCrop, completedCrop, setCompletedCrop,
+        imgSrc, setImgSrc,
         isAvatarModalOpen, setIsAvatarModalOpen, originalFileName, setOriginalFileName,
-        imgRef, showToast,
+        showToast,
     } = useAppContext();
 
     const [settingsTab, setSettingsTab] = useState("basic-info");
@@ -39,32 +39,13 @@ export const SettingsPage: React.FC = () => {
             const file = e.target.files[0];
             if (!file.type.startsWith('image/')) { showToast("Vui lòng chọn file ảnh.", "error"); return; }
             if (file.size > 5 * 1024 * 1024) { showToast("Ảnh không quá 5MB.", "error"); return; }
-            setOriginalFileName(file.name); setCrop(undefined);
+            setOriginalFileName(file.name);
             const reader = new FileReader();
             reader.onload = () => setImgSrc(reader.result?.toString() || '');
             reader.readAsDataURL(file);
             setIsAvatarModalOpen(true); e.target.value = "";
         }
-    }, [setOriginalFileName, setCrop, setImgSrc, setIsAvatarModalOpen, showToast]);
-
-    const handleAvatarUpdate = useCallback(async (croppedImageBlob: Blob | null) => {
-        if (!croppedImageBlob || !currentUser) { if (!croppedImageBlob) showToast("Không thể cắt ảnh.", "error"); setIsAvatarModalOpen(false); setImgSrc(''); return; }
-        const reader = new FileReader();
-        reader.readAsDataURL(croppedImageBlob);
-        reader.onloadend = async () => {
-            const base64data = reader.result;
-            if (!base64data) { showToast("Không thể đọc ảnh.", "error"); setIsAvatarModalOpen(false); setImgSrc(''); return; }
-            setLoading(true);
-            try {
-                const data = await api.put('/users/me/avatar', { avatarDataUrl: base64data });
-                setCurrentUser(prev => prev ? { ...prev, ...data.user } : data.user);
-                setUsers(users.map(u => u.id === data.user.id ? data.user : u));
-                setIsAvatarModalOpen(false); setImgSrc(''); showToast("Cập nhật ảnh thành công!", "success");
-            } catch (err: any) { showToast(err.message || "Lỗi cập nhật ảnh.", "error"); }
-            finally { setLoading(false); }
-        };
-        reader.onerror = () => { showToast("Lỗi đọc file ảnh.", "error"); setIsAvatarModalOpen(false); setImgSrc(''); }
-    }, [currentUser, api, setCurrentUser, setUsers, setIsAvatarModalOpen, setImgSrc, setLoading, showToast]);
+    }, [setOriginalFileName, setImgSrc, setIsAvatarModalOpen, showToast]);
 
 
     // --- Save Handler ---
@@ -144,7 +125,12 @@ export const SettingsPage: React.FC = () => {
     return (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
             {/* Render Modals */}
-             <AvatarCropModal isOpen={isAvatarModalOpen} onClose={() => { setIsAvatarModalOpen(false); setImgSrc(''); }} imgSrc={imgSrc} crop={crop} setCrop={setCrop} completedCrop={completedCrop} setCompletedCrop={setCompletedCrop} imgRef={imgRef} onSave={handleAvatarUpdate} isSaving={loading}/>
+             <AvatarCropModal
+                isOpen={isAvatarModalOpen}
+                onClose={() => { setIsAvatarModalOpen(false); setImgSrc(''); }}
+                imgSrc={imgSrc}
+                originalFileName={originalFileName}
+            />
             <ChangePasswordModal isOpen={changePasswordModalOpen} onClose={() => setChangePasswordModalOpen(false)} onChangePassword={handleChangePassword} isChanging={loading}/>
 
             {/* Left Sidebar */}

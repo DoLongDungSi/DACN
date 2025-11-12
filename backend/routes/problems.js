@@ -4,8 +4,77 @@ const pool = require('../config/db');
 const { authMiddleware, ownerOrCreatorMiddleware } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
 const multer = require('multer');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
+const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_SITE_URL = process.env.OPENROUTER_SITE_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+const OPENROUTER_APP_NAME = process.env.OPENROUTER_APP_NAME || 'ML Judge';
 
 const router = express.Router();
+
+const parseDatasets = (datasets) => {
+    if (!datasets) return [];
+    if (Array.isArray(datasets)) return datasets;
+    try { return JSON.parse(datasets); }
+    catch (e) { return []; }
+};
+
+const loadDatasetFromDisk = (filename) => {
+    if (!filename) return null;
+    const sanitizedFilename = path.basename(filename);
+    const candidatePaths = [
+        path.join('/usr/src/test', sanitizedFilename),
+        path.join(__dirname, '../../test', sanitizedFilename),
+        path.join(process.cwd(), 'test', sanitizedFilename),
+    ];
+    for (const candidate of candidatePaths) {
+        console.log(`Checking dataset path: ${candidate}`);
+        try {
+            if (fs.existsSync(candidate)) {
+                console.log(`Reading dataset file from disk: ${candidate}`);
+                return fs.readFileSync(candidate, 'utf8');
+            }
+        } catch (e) {
+            console.error('Error reading dataset file', candidate, e);
+        }
+    }
+    console.warn(`Dataset fallback not found for filename: ${JSON.stringify(sanitizedFilename)}`);
+    return null;
+};
+
+const buildDatasetList = (problemRow) => {
+    const rawDatasets = parseDatasets(problemRow.datasets);
+    if (!Array.isArray(rawDatasets)) return [];
+    return rawDatasets
+        .filter(entry => entry && entry.split)
+        .map(entry => {
+            const split = entry.split;
+            const sanitized = {
+                split,
+                filename: entry.filename || `${split}.csv`,
+                download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
+            };
+            if (split !== 'ground_truth') {
+                if (entry.content) {
+                    sanitized.content = entry.content;
+                } else if (split === 'public_test' && problemRow.public_test_content) {
+                    sanitized.content = problemRow.public_test_content;
+                } else {
+                    const fallback = loadDatasetFromDisk(entry.filename);
+                    if (fallback) {
+                        console.log(`Loaded dataset fallback for problem ${problemRow.id} (${entry.filename})`);
+                        sanitized.content = fallback;
+                    }
+                }
+            }
+            console.log('Dataset entry for problem', problemRow.id, JSON.stringify({...sanitized, content: sanitized.content ? `${sanitized.content.length} chars` : undefined}));
+            return sanitized;
+        })
+        .filter(entry => entry.split !== 'ground_truth');
+};
 
 // Configure multer for dataset, ground truth, and public test uploads (CSV files, stored in memory)
 const storage = multer.memoryStorage();
@@ -76,25 +145,48 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
 
 
   // --- Dataset, Ground Truth & Public Test Handling ---
-   let datasets = (isUpdate && Array.isArray(existingDatasets)) ? existingDatasets.filter(d => d && typeof d === 'object' && d.split && d.filename) : [];
+   const sanitizeDatasetEntry = (entry) => {
+       if (!entry || typeof entry !== 'object') return null;
+       if (!entry.split || !entry.filename) return null;
+       const normalized = {
+           split: entry.split,
+           filename: entry.filename,
+       };
+       if (entry.content && entry.split !== 'ground_truth') {
+           normalized.content = entry.content;
+       }
+       return normalized;
+   };
+
+   let datasets = (isUpdate && Array.isArray(existingDatasets))
+       ? existingDatasets.map(sanitizeDatasetEntry).filter(Boolean)
+       : [];
    let groundTruthContent = null;
    let publicTestContent = null;
    const files = req.files;
 
+   const addDatasetEntry = (split, filename, content = null) => {
+       datasets = datasets.filter(d => d && d.split !== split);
+       const entry = { split, filename };
+       if (content && split !== 'ground_truth') {
+           entry.content = content;
+       }
+       datasets.push(entry);
+   };
+
    // Process Train CSV
    if (files && files.trainCsv && files.trainCsv[0]) {
        const file = files.trainCsv[0];
-       datasets = datasets.filter(d => d.split !== 'train');
-       datasets.push({ split: 'train', filename: file.originalname });
+       const trainContent = file.buffer.toString('utf-8');
+       addDatasetEntry('train', file.originalname, trainContent);
        console.log(`Processed dataset file (train): ${file.originalname}`);
    }
 
    // Process Test Public CSV (Save content)
    if (files && files.testCsv && files.testCsv[0]) {
        const file = files.testCsv[0];
-       datasets = datasets.filter(d => d.split !== 'public_test');
-       datasets.push({ split: 'public_test', filename: file.originalname });
        publicTestContent = file.buffer.toString('utf-8');
+       addDatasetEntry('public_test', file.originalname, publicTestContent);
        console.log(`Processed public test file: ${file.originalname}, Content length: ${publicTestContent?.length ?? 'N/A'}`);
    }
 
@@ -104,8 +196,7 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
        groundTruthContent = file.buffer.toString('utf-8');
        console.log(`Processed ground truth file: ${file.originalname}, Content length: ${groundTruthContent?.length ?? 'N/A'}`);
        console.log(`GRND TRUTH CHECK: Is null? ${groundTruthContent === null}, Is undefined? ${groundTruthContent === undefined}, Is empty? ${groundTruthContent === ""}`);
-       datasets = datasets.filter(d => d.split !== 'ground_truth');
-       datasets.push({ split: 'ground_truth', filename: file.originalname });
+       addDatasetEntry('ground_truth', file.originalname);
    } else {
         console.log("No 'groundTruthCsv' field/file found in req.files AFTER processing."); // Log again after trying to access
    }
@@ -207,12 +298,14 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
                      (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
                      COALESCE(tags.tag_ids, '{}'::int[]) as tags,
                      COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
-                     COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details
+                     COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
+                     COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
               FROM problems p
               LEFT JOIN users u ON p.author_id = u.id
               LEFT JOIN (SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids FROM problem_tags WHERE problem_id = $1 GROUP BY problem_id) tags ON p.id = tags.problem_id
               LEFT JOIN (SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids FROM problem_metrics WHERE problem_id = $1 GROUP BY problem_id) metrics_agg ON p.id = metrics_agg.problem_id
               LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('id', m.id, 'key', m.key, 'direction', m.direction, 'isPrimary', pm.is_primary) ORDER BY m.key) as details FROM problem_metrics pm JOIN metrics m ON pm.metric_id = m.id WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_details ON p.id = metrics_details.problem_id
+              LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary) ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id) as links FROM problem_metrics pm WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_links ON p.id = metrics_links.problem_id
               WHERE p.id = $1`,
              [savedProblemId]
          );
@@ -395,12 +488,14 @@ router.get('/:id', async (req, res) => {
                (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
                COALESCE(tags.tag_ids, '{}'::int[]) as tags,
                COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
-               COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details
+               COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
+               COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
             FROM problems p
             LEFT JOIN users u ON p.author_id = u.id
             LEFT JOIN (SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids FROM problem_tags WHERE problem_id = $1 GROUP BY problem_id) tags ON p.id = tags.problem_id
             LEFT JOIN (SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids FROM problem_metrics WHERE problem_id = $1 GROUP BY problem_id) metrics_agg ON p.id = metrics_agg.problem_id
             LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('id', m.id, 'key', m.key, 'direction', m.direction, 'isPrimary', pm.is_primary) ORDER BY m.key) as details FROM problem_metrics pm JOIN metrics m ON pm.metric_id = m.id WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_details ON p.id = metrics_details.problem_id
+            LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary) ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id) as links FROM problem_metrics pm WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_links ON p.id = metrics_links.problem_id
             WHERE p.id = $1`,
            [problemId]
        );
@@ -410,11 +505,118 @@ router.get('/:id', async (req, res) => {
       }
       const problemData = result.rows[0];
       problemData.metrics_details = problemData.metrics_details || [];
+      problemData.datasets = buildDatasetList(problemData);
 
       res.json({ problem: toCamelCase(problemData) });
     } catch (error) {
       console.error(`Error fetching problem ${problemId}:`, error);
       res.status(500).json({ message: 'Lỗi server khi lấy chi tiết bài toán.' });
+    }
+});
+
+// --- Generate AI Hint ---
+router.post('/:id/hint', authMiddleware, async (req, res) => {
+    const { id } = req.params;
+    const problemId = Number(id);
+    if (isNaN(problemId)) {
+        return res.status(400).json({ message: 'Invalid ID.' });
+    }
+
+    if (!OPENROUTER_API_KEY) {
+        return res.status(503).json({ message: 'AI hint service is not configured.' });
+    }
+
+    try {
+        const problemRes = await pool.query('SELECT name, content FROM problems WHERE id = $1', [problemId]);
+        if (problemRes.rows.length === 0) {
+            return res.status(404).json({ message: 'Problem not found.' });
+        }
+
+        const problem = problemRes.rows[0];
+        const summary = (problem.content || '').replace(/<[^>]*>/g, '').slice(0, 600);
+        const prompt = `Provide a concise (max 3 sentences) strategic hint for this machine learning challenge:
+Title: ${problem.name}
+Summary: ${summary}
+Focus on approach guidance, not code, and keep the tone encouraging.`;
+
+        const response = await axios.post(
+            OPENROUTER_BASE_URL,
+            {
+                model: OPENROUTER_MODEL,
+                messages: [
+                    { role: 'system', content: 'You are an assistant helping competitors on a machine-learning contest platform with short strategic hints.' },
+                    { role: 'user', content: prompt },
+                ],
+                max_tokens: 200,
+                temperature: 0.3,
+            },
+            {
+                timeout: 20000,
+                headers: {
+                    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': OPENROUTER_SITE_URL,
+                    'X-Title': OPENROUTER_APP_NAME,
+                },
+            }
+        );
+
+        const hintText = response.data?.choices?.[0]?.message?.content;
+        if (!hintText) {
+            return res.status(502).json({ message: 'AI service did not return a hint.' });
+        }
+
+        res.json({ hint: hintText.trim() });
+    } catch (error) {
+        const apiError = error.response?.data?.error || error.message;
+        console.error('Error generating hint:', apiError);
+        res.status(502).json({ message: typeof apiError === 'string' ? apiError : 'Không tạo được gợi ý cho bài toán này.' });
+    }
+});
+
+// --- Download Dataset ---
+router.get('/:id/datasets/:split', async (req, res) => {
+    const problemId = Number(req.params.id);
+    const split = req.params.split;
+    if (isNaN(problemId)) {
+        return res.status(400).json({ message: 'Invalid ID.' });
+    }
+
+    if (split === 'ground_truth') {
+        return res.status(403).json({ message: 'Không thể tải ground truth.' });
+    }
+
+    try {
+        const problemRes = await pool.query(
+            'SELECT datasets, public_test_content FROM problems WHERE id = $1',
+            [problemId]
+        );
+        if (problemRes.rows.length === 0) {
+            return res.status(404).json({ message: 'Problem not found.' });
+        }
+
+        const problem = problemRes.rows[0];
+        const datasets = parseDatasets(problem.datasets);
+        const entry = datasets.find(d => d && d.split === split);
+        let content = entry?.content || null;
+        let filename = entry?.filename || `${split}.csv`;
+
+        if (!content && split === 'public_test') {
+            content = problem.public_test_content || loadDatasetFromDisk(entry?.filename);
+        } else if (!content) {
+            content = loadDatasetFromDisk(entry?.filename);
+        }
+
+        if (!content) {
+            return res.status(404).json({ message: 'Dataset chưa sẵn sàng để tải.' });
+        }
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(content);
+    } catch (error) {
+        console.error('Error downloading dataset:', error);
+        return res.status(500).json({ message: 'Không thể tải dataset.' });
     }
 });
 

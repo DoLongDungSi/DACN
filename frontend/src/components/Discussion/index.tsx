@@ -2,7 +2,7 @@ import React, { useMemo, useCallback } from 'react'; // Added useCallback
 import { PlusCircle, ArrowLeft, MessageSquare, ArrowUp } from 'lucide-react';
 import { formatDistanceToNow, parseISO, isValid } from 'date-fns'; // Added isValid
 import { useAppContext } from '../../hooks/useAppContext';
-import { DiscussionPost, DiscussionComment } from '../../types';
+import type { DiscussionPost, DiscussionComment } from '../../types';
 import { PostView } from './PostView';
 import { CommentThread } from './CommentThread';
 import { CommentForm } from './CommentForm';
