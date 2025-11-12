@@ -195,5 +195,5 @@ pyrightconfig.json
 
 
 # Words
-.doc
-.docx
+*.doc
+*.docx
