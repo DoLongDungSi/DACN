@@ -562,11 +562,14 @@ Focus on approach guidance, not code, and keep the tone encouraging.`;
         );
 
         const hintText = response.data?.choices?.[0]?.message?.content;
-        if (!hintText) {
+        const hintText2 = response.data?.choices?.[1]?.message?.content;
+        if (!hintText && !hintText2) {
             return res.status(502).json({ message: 'AI service did not return a hint.' });
         }
-
-        res.json({ hint: hintText.trim() });
+        if (!hintText)
+            res.json({ hint: hintText.trim() });
+        else
+            res.json({ hint: hintText2.trim() });
     } catch (error) {
         const apiError = error.response?.data?.error || error.message;
         console.error('Error generating hint:', apiError);

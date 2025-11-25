@@ -6,32 +6,38 @@ services:
     ports:
       - "3000:80"
     environment:
-      VITE_API_BASE_URL: http://localhost:5001/api
+      VITE_API_BASE_URL: /api
+    depends_on:
+      backend:
+        condition: service_started
 
   backend:
-      build:
-        context: ./backend
-      ports:
-        - "5001:5001"
-      environment:
-        DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
-        JWT_SECRET: 'your_super_secret_jwt_key_should_be_long_and_random'
-        FRONTEND_URL: http://localhost:3000 
-        EVALUATION_SERVICE_URL: http://microservice:5002/evaluate 
-        # PORT: 5001
-        NODE_ENV: development
-        OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-        OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/auto}
-      depends_on:
-        db:
-          condition: service_healthy
-        microservice: 
-          condition: service_started
-      volumes:
-         - ./backend:/usr/src/app
-         - /usr/src/app/node_modules 
-         - ./test:/usr/src/test:ro
-      command: npm start 
+    build:
+      context: ./backend
+    ports:
+      - "5001:5001"
+    environment:
+      DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
+      JWT_SECRET: '8er3y2678etrb7326bte93r765etr356vre45r476e5r36e8r3796er673rt76'
+      # FRONTEND_URL: https://0zfxt8b3-3000.asse.devtunnels.ms/
+      FRONTEND_URL: http://localhost:3000
+      EVALUATION_SERVICE_URL: http://microservice:5002/evaluate 
+      # PORT: 5001
+      NODE_ENV: development
+      # OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-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}
+      # OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3-4b:free}
+      OPENROUTER_API_KEY: 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
+      OPENROUTER_MODEL: tngtech/deepseek-r1t2-chimera:free
+    depends_on:
+      db:
+        condition: service_healthy
+      microservice: 
+        condition: service_started
+    volumes:
+        - ./backend:/usr/src/app
+        - /usr/src/app/node_modules 
+        - ./test:/usr/src/test:ro
+    command: npm start 
 
   microservice:
     build:

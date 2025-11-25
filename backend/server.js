@@ -9,11 +9,49 @@ const { PORT } = require('./config/constants'); // Import PORT from constants
 const app = express();
 
 // --- CORS Configuration ---
-// Make sure this is specific and secure for production
+const normalizeOrigin = (origin) => {
+  if (!origin) return origin;
+  try {
+    const url = new URL(origin);
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return origin.replace(/\/$/, '');
+  }
+};
+
+const rawFrontendOrigin = process.env.FRONTEND_URL;
+let allowedOrigins = true;
+
+if (rawFrontendOrigin) {
+  if (rawFrontendOrigin.trim() === '*') {
+    allowedOrigins = true;
+  } else {
+    const parsedOrigins = rawFrontendOrigin
+      .split(',')
+      .map(origin => normalizeOrigin(origin.trim()))
+      .filter(Boolean);
+
+    allowedOrigins = parsedOrigins.includes('*') ? true : parsedOrigins;
+  }
+}
+
+const resolveOrigin = allowedOrigins === true
+  ? true
+  : (origin, callback) => {
+      const normalizedOrigin = normalizeOrigin(origin);
+      // Allow requests with no origin (mobile apps, curl, etc.)
+      if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Origin ${origin} not allowed by CORS`));
+    };
+
 const corsOptions = {
-  // Allow requests from your frontend origin
-  origin: process.env.FRONTEND_URL || true, // Use env var or allow all in dev (true) - BE CAREFUL with 'true' in prod
-  credentials: true, // Allow cookies to be sent
+  origin: resolveOrigin,
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };

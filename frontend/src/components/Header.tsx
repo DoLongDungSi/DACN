@@ -5,7 +5,7 @@ import type { Page } from '../types';
 import { UserAvatar } from './Common/UserAvatar';
 
 export const Header: React.FC = () => {
-    const { currentUser, page, navigate, handleLogout, setEditingProblem } = useAppContext();
+    const { currentUser, page, navigate, handleLogout, setEditingProblem, setCurrentView } = useAppContext();
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -118,8 +118,14 @@ export const Header: React.FC = () => {
                         )}
                     </div>
                  ) : (
-                     // Placeholder or Login button if needed when not logged in within the main view
-                     <div></div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => setCurrentView('auth')}
+                            className="font-semibold px-4 py-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+                        >
+                            Đăng nhập / Đăng ký
+                        </button>
+                    </div>
                  )}
             </div>
         </header>

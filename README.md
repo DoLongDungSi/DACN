@@ -3,7 +3,7 @@
 
 ## Để có thể chạy được dự án, ta cần docker, npm và python
 
-Trên Arch-base, bạn có thể dùng yay để cài đặt:
+Trên Arch-basedùng, bạn có thể dùng yay để cài đặt:
 
 ```bash
 yay -S npm docker docker-compose python

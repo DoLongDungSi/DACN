@@ -400,9 +400,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
      const handleLogout = useCallback(async () => { setLoading(true); try { await api.post('/auth/logout', {}); setCurrentUser(null); setUsers([]); setProblems([]); setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({}); setSelectedProblem(null); setViewingUserId(null); setCurrentView('auth'); setError(''); showToast("Đã đăng xuất.", 'info'); routerNavigate('/problems', { replace: true }); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, showToast, setLoading, setCurrentUser, setUsers, setProblems, setSubmissions, setPosts, setComments, setLeaderboardData, setSelectedProblem, setViewingUserId, setCurrentView, setError, routerNavigate]);
 
      // --- Initial Session Check & Data Load ---
-     useEffect(() => {
-        const initializeApp = async () => { console.log("Initializing App..."); setLoading(true); try { console.log("Checking session..."); const data = await api.get('/auth/check-session'); console.log("Session check successful, user:", data.user?.username); setCurrentUser(data.user); console.log("Fetching all data..."); await fetchAllData(); console.log("Data fetch complete."); setCurrentView('main'); } catch (e) { console.log("No active session or error checking session. Setting view to auth."); setCurrentUser(null); setCurrentView('auth'); } finally { console.log("Initialization complete. Setting loading to false."); setLoading(false); } }; initializeApp();
-     }, [api, fetchAllData]);
+    useEffect(() => {
+        const initializeApp = async () => {
+            console.log("Initializing App...");
+            setLoading(true);
+            try {
+                console.log("Checking session...");
+                const data = await api.get('/auth/check-session');
+                console.log("Session check successful, user:", data.user?.username);
+                setCurrentUser(data.user);
+            } catch (e) {
+                console.log("No active session or error checking session. Continuing as guest.");
+                setCurrentUser(null);
+            }
+            try {
+                console.log("Fetching all data...");
+                await fetchAllData();
+                console.log("Data fetch complete.");
+            } catch (err) {
+                console.error("Failed to fetch initial data:", err);
+            }
+            setCurrentView('main');
+            console.log("Initialization complete. Setting loading to false.");
+            setLoading(false);
+        };
+        initializeApp();
+    }, [api, fetchAllData]);
 
     // --- Navigation Function ---
 

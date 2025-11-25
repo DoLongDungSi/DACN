@@ -4,7 +4,7 @@
 // Use environment variables in a real application
 const envApiBase = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_BASE_URL : undefined;
 const globalApiBase = typeof window !== 'undefined' ? (window as any).__APP_API_BASE_URL__ : undefined;
-export const API_BASE_URL = envApiBase || globalApiBase || "http://localhost:5001/api"; 
+export const API_BASE_URL = envApiBase || globalApiBase || "/api";
 export const OWNER_ID = 1; // Assuming owner ID is constant
 
 /**
