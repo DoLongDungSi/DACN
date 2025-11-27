@@ -26,8 +26,8 @@ services:
       NODE_ENV: development
       # OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-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}
       # OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3-4b:free}
-      OPENROUTER_API_KEY: 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
-      OPENROUTER_MODEL: tngtech/deepseek-r1t2-chimera:free
+      OPENROUTER_API_KEY: 
+      OPENROUTER_MODEL: x-ai/grok-4.1-fast:free
     depends_on:
       db:
         condition: service_healthy

@@ -515,7 +515,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // --- Generate AI Hint ---
-router.post('/:id/hint', authMiddleware, async (req, res) => {
+router.post('/:id/hint', async (req, res) => {
     const { id } = req.params;
     const problemId = Number(id);
     if (isNaN(problemId)) {
@@ -563,17 +563,24 @@ Focus on approach guidance, not code, and keep the tone encouraging.`;
 
         const hintText = response.data?.choices?.[0]?.message?.content;
         const hintText2 = response.data?.choices?.[1]?.message?.content;
-        if (!hintText && !hintText2) {
+        const finalHint = hintText || hintText2;
+        if (!finalHint) {
             return res.status(502).json({ message: 'AI service did not return a hint.' });
         }
-        if (!hintText)
-            res.json({ hint: hintText.trim() });
-        else
-            res.json({ hint: hintText2.trim() });
+        res.json({ hint: finalHint.trim() });
     } catch (error) {
-        const apiError = error.response?.data?.error || error.message;
+        const apiError = error.response?.data?.error || error.response?.data || error.message;
         console.error('Error generating hint:', apiError);
-        res.status(502).json({ message: typeof apiError === 'string' ? apiError : 'Không tạo được gợi ý cho bài toán này.' });
+
+        // Surface clearer info for common OpenRouter errors (e.g., invalid key / user not found)
+        const fallback = 'Không tạo được gợi ý cho bài toán này.';
+        if (typeof apiError === 'string') {
+            return res.status(502).json({ message: apiError || fallback });
+        }
+        if (apiError?.message) {
+            return res.status(502).json({ message: apiError.message });
+        }
+        return res.status(502).json({ message: fallback });
     }
 });
 
