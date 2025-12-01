@@ -572,15 +572,18 @@ Focus on approach guidance, not code, and keep the tone encouraging.`;
         const apiError = error.response?.data?.error || error.response?.data || error.message;
         console.error('Error generating hint:', apiError);
 
-        // Surface clearer info for common OpenRouter errors (e.g., invalid key / user not found)
-        const fallback = 'Không tạo được gợi ý cho bài toán này.';
-        if (typeof apiError === 'string') {
-            return res.status(502).json({ message: apiError || fallback });
-        }
-        if (apiError?.message) {
-            return res.status(502).json({ message: apiError.message });
-        }
-        return res.status(502).json({ message: fallback });
+        // Fall back to a local/static hint so UI still works even if OpenRouter key fails
+        const fallbackHint = 'Hãy bắt đầu bằng một baseline đơn giản, kiểm tra kỹ format dữ liệu và thử so sánh nhiều mô hình/feature nhanh trước khi tối ưu.';
+
+        const message = (typeof apiError === 'string')
+            ? apiError
+            : (apiError?.message || 'Không tạo được gợi ý cho bài toán này.');
+
+        // Return both the warning message and a usable fallback hint
+        return res.status(200).json({
+            hint: fallbackHint,
+            warning: message,
+        });
     }
 });
 
