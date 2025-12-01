@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
 import remarkMath from 'remark-math'; // Import remarkMath
+import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex'; // Import rehypeKatex
 import 'katex/dist/katex.min.css'; // Import KaTeX CSS
 import { ArrowLeft, Lightbulb, DownloadCloud, FileText, BarChart3, MessageSquare, Upload } from 'lucide-react';
@@ -151,7 +152,7 @@ export const ProblemDetailPage: React.FC = () => {
                                      {/* Use ReactMarkdown for rendering description */}
                                     <article className="prose prose-sm sm:prose-base max-w-none prose-slate prose-headings:font-semibold prose-a:text-indigo-600 hover:prose-a:text-indigo-800 prose-code:before:content-none prose-code:after:content-none prose-code:bg-slate-100 prose-code:text-slate-700 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-medium prose-pre:bg-slate-800 prose-pre:text-slate-200 prose-pre:rounded-lg prose-table:border prose-th:p-2 prose-td:p-2">
                                         <ReactMarkdown
-                                            remarkPlugins={[remarkMath]}
+                                            remarkPlugins={[remarkGfm, remarkMath]}
                                             rehypePlugins={[rehypeKatex]}
                                         >
                                             {selectedProblem.content || '*Không có mô tả.*'}
@@ -166,7 +167,7 @@ export const ProblemDetailPage: React.FC = () => {
                                             {isGeneratingHint ? 'Đang lấy gợi ý...' : (problemHint ? 'Xem gợi ý' : 'Lấy gợi ý AI ✨')}
                                         </button>
                                         {isGeneratingHint && <LoadingSpinner overlay={false}/>}
-                                        {problemHint && !isGeneratingHint && <div className="hint-display"><ReactMarkdown>{problemHint}</ReactMarkdown></div>}
+                                        {problemHint && !isGeneratingHint && <div className="hint-display"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{problemHint}</ReactMarkdown></div>}
                                     </div>
                                 </div>
                             )}

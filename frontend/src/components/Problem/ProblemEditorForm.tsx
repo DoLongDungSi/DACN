@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css'; // Import KaTeX CSS
@@ -40,26 +41,26 @@ from sklearn.metrics import accuracy_score
 # 4. output_path: Đường dẫn đến file .txt nơi script phải ghi điểm số cuối cùng.
 
 # QUY TẮC GHI ĐIỂM VÀO FILE OUTPUT:
-# - Ghi "-1.0": Nếu file submission của người dùng sai định dạng (sai cột, sai số dòng, sai ID, giá trị thiếu, kiểu dữ liệu sai, etc.).
-# - Ghi "0.0": Nếu định dạng đúng nhưng có lỗi xảy ra trong quá trình TÍNH ĐIỂM (ví dụ: lỗi chia cho 0, lỗi đọc ground truth, lỗi logic tính toán).
-# - Ghi điểm số >= 0: Nếu mọi thứ thành công (cả kiểm tra định dạng và tính điểm).
+# - Luôn ghi một số thực (float).
+# - Nếu sai định dạng hoặc lỗi tính điểm: ghi "0.0".
+# - Nếu thành công: ghi điểm >= 0 (phụ thuộc metric).
 
 # QUY TẮC EXIT CODE:
-# - sys.exit(1): Nếu xảy ra lỗi (cả lỗi định dạng và lỗi tính toán). Script SẼ ghi -1.0 hoặc 0.0 vào output_path TRƯỚC KHI exit.
+# - sys.exit(1): Nếu xảy ra lỗi (định dạng hoặc tính điểm). Script SẼ ghi 0.0 vào output_path TRƯỚC KHI exit.
 # - sys.exit(0) hoặc không gọi exit: Nếu script chạy thành công và ghi điểm >= 0 vào output_path.
 
 def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
     """
     Quy trình khuyến nghị:
     1. Bọc logic kiểm tra định dạng trong một khối try...except ValueError.
-       - Nếu có lỗi định dạng, bắt ValueError, ghi -1.0 vào output_path và gọi sys.exit(1).
+       - Nếu có lỗi định dạng, bắt ValueError, ghi 0.0 vào output_path và gọi sys.exit(1).
     2. Nếu định dạng đúng, thực hiện tính điểm.
        - Bọc logic tính điểm trong một khối try...except chung (Exception).
        - Nếu có lỗi trong quá trình này (kể cả đọc ground truth), bắt Exception, ghi 0.0 vào output_path và gọi sys.exit(1).
     3. Nếu tính điểm thành công, ghi điểm số (>= 0) vào output_path. Script sẽ tự động kết thúc với exit code 0.
     """
     required_columns = ['id', 'prediction']
-    final_score = -1.0 # Mặc định là lỗi định dạng nếu có lỗi xảy ra sớm
+    final_score = 0.0 # Mặc định 0.0 nếu có lỗi xảy ra sớm
 
     try:
         # === PHẦN 1: KIỂM TRA ĐỊNH DẠNG ===
@@ -108,7 +109,7 @@ def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
                 raise ValueError("Cột 'prediction' phải chứa dữ liệu dạng số.")
 
 
-        # (Optional) Thêm kiểm tra đặc thù cho loại bài toán, VẪN thuộc lỗi định dạng (-1.0)
+        # (Optional) Thêm kiểm tra đặc thù cho loại bài toán, VẪN thuộc lỗi định dạng (0.0)
         # Ví dụ: Classification - prediction phải là 0 hoặc 1
         # problem_type = "classification" # Lấy từ đâu đó nếu cần, hoặc giả định
         # if problem_type == "classification":
@@ -181,31 +182,26 @@ def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
         print("--- Tính điểm OK ---")
 
     except ValueError as format_error:
-        # Bắt lỗi định dạng từ PHẦN 1
+        # Bắt lỗi định dạng từ PHẦN 1 -> 0.0 điểm
         print(f"LỖI ĐỊNH DẠNG: {format_error}", file=sys.stderr)
-        final_score = -1.0
+        final_score = 0.0
         try:
-            # Ghi điểm lỗi (-1.0) vào file output
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(str(final_score))
         except Exception as write_e:
-            print(f"Lỗi nghiêm trọng: Không thể ghi điểm lỗi định dạng (-1.0) vào file output: {write_e}", file=sys.stderr)
-        # Quan trọng: Thoát với mã lỗi 1 sau khi ghi (hoặc cố gắng ghi)
+            print(f"Lỗi nghiêm trọng: Không thể ghi điểm lỗi định dạng (0.0) vào file output: {write_e}", file=sys.stderr)
         sys.exit(1)
 
     except Exception as calc_error:
-        # Bắt lỗi tính toán hoặc các lỗi khác từ PHẦN 2 (RuntimeError, etc.)
+        # Bắt lỗi tính toán hoặc các lỗi khác từ PHẦN 2 (RuntimeError, etc.) -> 0.0 điểm
         print(f"LỖI TÍNH TOÁN/KHÁC: {calc_error}", file=sys.stderr)
-        # In traceback đầy đủ để dễ debug
         print(f"Traceback:\n{traceback.format_exc()}", file=sys.stderr)
         final_score = 0.0
         try:
-            # Ghi điểm lỗi (0.0) vào file output
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(str(final_score))
         except Exception as write_e:
             print(f"Lỗi nghiêm trọng: Không thể ghi điểm lỗi tính toán (0.0) vào file output: {write_e}", file=sys.stderr)
-        # Quan trọng: Thoát với mã lỗi 1 sau khi ghi (hoặc cố gắng ghi)
         sys.exit(1)
 
     # === PHẦN 3: GHI ĐIỂM THÀNH CÔNG ===
@@ -226,11 +222,11 @@ if __name__ == "__main__":
     # Kiểm tra số lượng arguments
     if len(sys.argv) != 5:
         print("Lỗi: Script cần đúng 4 arguments: <submission_path> <ground_truth_path> <public_test_path> <output_path>", file=sys.stderr)
-        # Ghi điểm lỗi mặc định (-1.0) nếu có thể để backend biết đây là lỗi setup
+        # Ghi điểm lỗi mặc định (0.0) nếu có thể để backend biết đây là lỗi setup
         # Điều này hơi khó vì output_path có thể không đúng, nhưng thử ghi vào argument cuối nếu có
         if len(sys.argv) > 4:
             try:
-                with open(sys.argv[4], 'w', encoding='utf-8') as f_err: f_err.write("-1.0")
+                with open(sys.argv[4], 'w', encoding='utf-8') as f_err: f_err.write("0.0")
             except Exception: pass # Bỏ qua nếu không ghi được
         sys.exit(1) # Thoát với mã lỗi
 
@@ -262,7 +258,7 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
     const [name, setName] = useState(isNew ? "" : initialProblem.name);
     const [difficulty, setDifficulty] = useState<Difficulty>(isNew ? "easy" : initialProblem.difficulty);
     const [problemType, setProblemType] = useState<ProblemType>(isNew ? "classification" : initialProblem.problemType);
-    const [content, setContent] = useState(isNew ? "## Mô tả\n\nViết mô tả chi tiết bài toán...\n\n## Dữ liệu\n\nMô tả dữ liệu train/test...\n\n## Định dạng nộp bài\n\nChỉ rõ định dạng file submission...\n\n## Tiêu chí đánh giá\n\nGiải thích metric và cách tính điểm...\n\nSử dụng **Markdown** và công thức LaTeX như $E=mc^2$ hoặc:\n\n$$\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2$$\n" : initialProblem.content);
+    const [content, setContent] = useState(isNew ? "## Mô tả\n\nGiới thiệu ngắn gọn bài toán và mục tiêu.\n\n## Giới thiệu dữ liệu\n- `train.csv`: dữ liệu huấn luyện có cả nhãn.\n- `test.csv`: dữ liệu kiểm tra công khai (không có nhãn).\n- Nêu rõ các cột bắt buộc, kiểu dữ liệu, và yêu cầu làm sạch.\n\n## Nộp bài & Format\n- File `submission.csv` gồm 2 cột: `id` và `prediction`.\n- Số dòng phải khớp `test.csv`, thứ tự và id phải chính xác.\n- Nếu file sai định dạng/thiếu dữ liệu: điểm sẽ là **0.0**.\n\n## Cách tính điểm\n- Chỉ rõ metric chính, ví dụ: Accuracy / RMSE.\n- Nếu xảy ra lỗi khi tính điểm (overflow, NaN, chia cho 0...): điểm cũng **0.0**.\n- Có thể nêu ví dụ minh họa.\n\n## Gợi ý\nSử dụng **Markdown** và công thức LaTeX như $E=mc^2$ hoặc:\n\n$$\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2$$\n" : initialProblem.content);
     const [selectedTagIds, setSelectedTagIds] = useState<number[]>(isNew ? [] : (initialProblem.tags || []));
     const [selectedMetricIds, setSelectedMetricIds] = useState<number[]>(isNew ? [] : (initialProblem.metrics || []));
     const [trainFile, setTrainFile] = useState<File | null>(null);
@@ -285,7 +281,7 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
     useEffect(() => {
         if (initialProblem === "new") {
             setName(""); setDifficulty("easy"); setProblemType("classification");
-            setContent("## Mô tả\n\nViết mô tả chi tiết bài toán...\n\n## Dữ liệu\n\nMô tả dữ liệu train/test...\n\n## Định dạng nộp bài\n\nChỉ rõ định dạng file submission...\n\n## Tiêu chí đánh giá\n\nGiải thích metric và cách tính điểm...\n\nSử dụng **Markdown** và công thức LaTeX như $E=mc^2$ hoặc:\n\n$$\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2$$\n");
+            setContent("## Mô tả\n\nGiới thiệu ngắn gọn bài toán và mục tiêu.\n\n## Giới thiệu dữ liệu\n- `train.csv`: dữ liệu huấn luyện có cả nhãn.\n- `test.csv`: dữ liệu kiểm tra công khai (không có nhãn).\n- Nêu rõ các cột bắt buộc, kiểu dữ liệu, và yêu cầu làm sạch.\n\n## Nộp bài & Format\n- File `submission.csv` gồm 2 cột: `id` và `prediction`.\n- Số dòng phải khớp `test.csv`, thứ tự và id phải chính xác.\n- Nếu file sai định dạng/thiếu dữ liệu: điểm sẽ là **0.0**.\n\n## Cách tính điểm\n- Chỉ rõ metric chính, ví dụ: Accuracy / RMSE.\n- Nếu xảy ra lỗi khi tính điểm (overflow, NaN, chia cho 0...): điểm cũng **0.0**.\n- Có thể nêu ví dụ minh họa.\n\n## Gợi ý\nSử dụng **Markdown** và công thức LaTeX như $E=mc^2$ hoặc:\n\n$$\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2$$\n");
             setSelectedTagIds([]); setSelectedMetricIds([]); setTrainFile(null); setTestFile(null); setGroundTruthFile(null);
             setScriptContent(defaultFormatCheckScript);
         } else {
@@ -354,7 +350,7 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
                 <p className="text-xs text-gray-500 mb-2">Mô tả chi tiết bài toán, dữ liệu, định dạng nộp bài, tiêu chí đánh giá... Hỗ trợ Markdown và công thức LaTeX ($inline$ hoặc $$block$$).</p>
                 <div className={`grid ${showPreview ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'} gap-4`}>
                     <div> <label htmlFor="problemContent" className="sr-only">Nội dung bài toán</label> <textarea id="problemContent" value={content} onChange={(e) => setContent(e.target.value)} rows={showPreview ? 20 : 15} required placeholder="Viết nội dung ở đây..." className="content-textarea" spellCheck="false"></textarea> </div>
-                    {showPreview && ( <div className="md:border-l md:pl-4 border-slate-200"> <label className="block text-sm font-medium text-gray-700 mb-2">Xem trước</label> <div className="content-preview-container"> <article className="prose prose-sm max-w-none prose-slate prose-headings:font-semibold prose-a:text-indigo-600 hover:prose-a:text-indigo-800 prose-code:before:content-none prose-code:after:content-none prose-code:bg-slate-100 prose-code:text-slate-700 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-medium prose-pre:bg-slate-800 prose-pre:text-slate-200 prose-pre:rounded-lg"> <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}> {content || '*Chưa có nội dung*'} </ReactMarkdown> </article> </div> </div> )}
+                    {showPreview && ( <div className="md:border-l md:pl-4 border-slate-200"> <label className="block text-sm font-medium text-gray-700 mb-2">Xem trước</label> <div className="content-preview-container"> <article className="prose prose-sm max-w-none prose-slate prose-headings:font-semibold prose-a:text-indigo-600 hover:prose-a:text-indigo-800 prose-code:before:content-none prose-code:after:content-none prose-code:bg-slate-100 prose-code:text-slate-700 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-medium prose-pre:bg-slate-800 prose-pre:text-slate-200 prose-pre:rounded-lg"> <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}> {content || '*Chưa có nội dung*'} </ReactMarkdown> </article> </div> </div> )}
                 </div>
             </div>
              {/* Datasets & Script Card */}
@@ -405,7 +401,7 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
                 .preview-toggle-button { display: flex; align-items: center; padding: 0.375rem 0.75rem; border-radius: 0.5rem; background-color: #f1f5f9; font-size: 0.75rem; font-weight: 500; color: #475569; transition: background-color 150ms ease-in-out; } .preview-toggle-button:hover { background-color: #e2e8f0; }
                 .content-textarea { width: 100%; height: 100%; min-height: 200px; padding: 1rem 1rem; border: 1px solid #d1d5db; border-radius: 0.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.875rem; resize: vertical; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); transition: border-color 150ms ease-in-out, box-shadow 150ms ease-in-out; }
                 .content-textarea:focus { outline: 2px solid transparent; outline-offset: 2px; border-color: #4f46e5; box-shadow: 0 0 0 2px #c7d2fe; }
-                .content-preview-container { height: calc(20 * 1.5rem); padding: 1rem 1rem; border: 1px solid #d1d5db; border-radius: 0.5rem; overflow-y: auto; background-color: rgba(249, 250, 251, 0.5); box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; }
+                .content-preview-container { max-height: 30rem; min-height: 20rem; padding: 1rem 1rem; border: 1px solid #d1d5db; border-radius: 0.5rem; overflow-y: auto; background-color: rgba(249, 250, 251, 0.5); box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; }
                 .input-label-file { display: block; font-size: 0.875rem; font-weight: 500; color: #4b5563; margin-bottom: 0.25rem; }
                 .file-input-style { display: block; width: 100%; font-size: 0.875rem; color: #6b7280; padding: 0.25rem; file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 file:cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-1 rounded-md }
                 .file-status-ok { font-size: 0.75rem; color: #059669; margin-top: 0.5rem; }
@@ -417,7 +413,12 @@ export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
                 @keyframes fade-in { 0% { opacity: 0; transform: scale(0.95); } 100% { opacity: 1; transform: scale(1); } }
                 .animate-fade-in { animation: fade-in 0.2s ease-out forwards; }
                 .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; } .scrollbar-thin::-webkit-scrollbar { width: 6px; } .scrollbar-thin::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; } .scrollbar-thin::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; border: 1px solid #f1f5f9; }
-                 .prose .katex-display { margin-left: 0; margin-right: 0; overflow-x: auto;} .prose code { font-weight: 500; }
+                .prose .katex-display { margin-left: 0; margin-right: 0; overflow-x: auto;} .prose code { font-weight: 500; }
+                .prose h1 { font-size: 1.5rem; margin-top: 0.25rem; margin-bottom: 0.5rem; }
+                .prose h2 { font-size: 1.25rem; margin-top: 0.5rem; margin-bottom: 0.35rem; }
+                .prose h3 { font-size: 1.1rem; margin-top: 0.35rem; margin-bottom: 0.25rem; }
+                .prose h4 { font-size: 1rem; margin-top: 0.25rem; margin-bottom: 0.2rem; }
+                .prose h1, .prose h2, .prose h3, .prose h4 { color: #0f172a; font-weight: 700; }
             `}</style>
         </form>
     );

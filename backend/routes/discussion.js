@@ -356,6 +356,9 @@ router.post('/:targetType(posts|comments)/:targetId/vote', async (req, res) => {
   const numericTargetId = Number(targetId);
 
   // Validation
+  if (!userId) {
+      return res.status(401).json({ message: 'Not authenticated' });
+  }
   if (isNaN(numericTargetId)) {
       return res.status(400).json({ message: 'Invalid target ID.' });
   }
@@ -379,26 +382,30 @@ router.post('/:targetType(posts|comments)/:targetId/vote', async (req, res) => {
 
     const currentVoteType = existingVotes.length > 0 ? existingVotes[0].vote_type : null;
 
-    // If the user is trying to cast the same vote again, remove the vote (toggle off)
+    // Toggle logic:
+    // - same vote -> remove (neutral)
+    // - opposite vote -> update
+    // - no vote -> insert
     if (currentVoteType === voteValue) {
         await client.query(
             `DELETE FROM votes WHERE user_id = $1 AND ${targetColumn} = $2`,
             [userId, numericTargetId]
         );
-    } else {
-        // If changing vote or casting new vote, use INSERT ... ON CONFLICT UPDATE
-        // Ensure ON CONFLICT targets the correct unique constraint columns
+    } else if (currentVoteType === null) {
         await client.query(
             `INSERT INTO votes (user_id, post_id, comment_id, vote_type)
-             VALUES ($1, ${targetType === 'posts' ? '$2' : 'NULL'}, ${targetType === 'comments' ? '$2' : 'NULL'}, $3)
-             ON CONFLICT (user_id, post_id, comment_id)
-             DO UPDATE SET vote_type = EXCLUDED.vote_type`, // Update vote_type if conflict occurs
+             VALUES ($1, ${targetType === 'posts' ? '$2' : 'NULL'}, ${targetType === 'comments' ? '$2' : 'NULL'}, $3)`,
             [userId, numericTargetId, voteValue]
+        );
+    } else {
+        await client.query(
+            `UPDATE votes SET vote_type = $1 WHERE user_id = $2 AND ${targetColumn} = $3`,
+            [voteValue, userId, numericTargetId]
         );
     }
 
-
     await client.query('COMMIT');
+
 
     // --- Fetch Updated Item with Votes ---
     // Determine table name based on targetType

@@ -26,7 +26,7 @@ const safeFormatDistanceToNow = (dateString: string | null | undefined): string 
 };
 
 export const PostView: React.FC<PostViewProps> = ({ post, handleVote }) => {
-    const { currentUser, navigateToProfile, editingItemId, setEditingItemId, editingItemType, setEditingItemType, handleUpdatePost, handleDeletePost, loading } = useAppContext(); // Get editing state and handlers
+    const { currentUser, navigateToProfile, editingItemId, setEditingItemId, editingItemType, setEditingItemType, handleUpdatePost, handleDeletePost, loading, votingKey } = useAppContext(); // Get editing state and handlers
 
     // Local state for editing form
     const [editTitle, setEditTitle] = useState('');
@@ -73,13 +73,15 @@ export const PostView: React.FC<PostViewProps> = ({ post, handleVote }) => {
         else console.error("Cannot navigate to profile, missing userId for post:", post.id);
     };
 
+    const isVoting = votingKey === `posts-${post.id}` || votingKey === `post-${post.id}`;
+
     return (
         <div className="flex items-start space-x-4 p-1">
             {/* Voting Section */}
             <div className="flex flex-col items-center space-y-1 flex-shrink-0 pt-1">
                 <button
                     onClick={() => handleVote('posts', post.id, 'up')}
-                    disabled={!currentUser || loading} // Disable voting while saving edit
+                    disabled={!currentUser || loading || isVoting} // Disable voting while saving edit
                     className="vote-button"
                     aria-label="Upvote post"
                 >
@@ -88,7 +90,7 @@ export const PostView: React.FC<PostViewProps> = ({ post, handleVote }) => {
                 <span className="font-bold text-lg text-slate-700 select-none w-8 text-center" aria-label={`Score: ${voteCount}`}> {voteCount} </span>
                 <button
                     onClick={() => handleVote('posts', post.id, 'down')}
-                    disabled={!currentUser || loading} // Disable voting while saving edit
+                    disabled={!currentUser || loading || isVoting} // Disable voting while saving edit
                     className="vote-button"
                     aria-label="Downvote post"
                 >

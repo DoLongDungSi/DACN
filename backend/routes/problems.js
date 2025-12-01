@@ -481,6 +481,7 @@ router.get('/:id', async (req, res) => {
        const result = await pool.query(
            `SELECT
                p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
+               p.evaluation_script,
                u.username as author_username,
                p.datasets,
                (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
@@ -522,17 +523,23 @@ router.post('/:id/hint', async (req, res) => {
         return res.status(400).json({ message: 'Invalid ID.' });
     }
 
-    if (!OPENROUTER_API_KEY) {
-        return res.status(503).json({ message: 'AI hint service is not configured.' });
-    }
+    // Even when no API key is configured, return a graceful fallback instead of erroring
+    const noKeyFallback = () => res.status(200).json({
+        hint: 'Hãy bắt đầu bằng một baseline đơn giản, kiểm tra kỹ format dữ liệu và thử nhiều đặc trưng/thuật toán nhanh trước khi tối ưu.',
+        warning: 'AI hint service is not configured – đang dùng gợi ý mặc định.',
+    });
 
     try {
         const problemRes = await pool.query('SELECT name, content FROM problems WHERE id = $1', [problemId]);
         if (problemRes.rows.length === 0) {
             return res.status(404).json({ message: 'Problem not found.' });
         }
-
         const problem = problemRes.rows[0];
+
+        if (!OPENROUTER_API_KEY) {
+            return noKeyFallback();
+        }
+
         const summary = (problem.content || '').replace(/<[^>]*>/g, '').slice(0, 600);
         const prompt = `Provide a concise (max 3 sentences) strategic hint for this machine learning challenge:
 Title: ${problem.name}

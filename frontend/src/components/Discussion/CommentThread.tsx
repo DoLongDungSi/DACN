@@ -1,4 +1,9 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import remarkGfm from 'remark-gfm';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { ArrowUp, ArrowDown, Edit3, Trash2 } from 'lucide-react'; // Added Edit3, Trash2
 import type { DiscussionComment, User } from '../../types';
@@ -23,7 +28,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
     handleCommentSubmit, // Renamed from handleCommentSubmit to avoid conflict with update
     depth = 0
 }) => {
-    const { currentUser, navigateToProfile, editingItemId, setEditingItemId, editingItemType, setEditingItemType, handleUpdateComment, handleDeleteComment, replyingTo, setReplyingTo } = useAppContext(); // Get editing state and handlers
+    const { currentUser, navigateToProfile, editingItemId, setEditingItemId, editingItemType, setEditingItemType, handleUpdateComment, handleDeleteComment, replyingTo, setReplyingTo, votingKey } = useAppContext(); // Get editing state and handlers
 
     const isEditing = editingItemType === 'comment' && editingItemId === comment.id;
     const isReplying = replyingTo === comment.id;
@@ -35,6 +40,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
     const userVote = comment.upvotedBy?.includes(currentUser?.id ?? -1) ? 'up' : comment.downvotedBy?.includes(currentUser?.id ?? -1) ? 'down' : null;
     const canEditDelete = currentUser && (currentUser.id === comment.userId || currentUser.role === 'owner');
     const marginLeft = depth > 0 ? `${depth * 1.5}rem` : '0';
+    const isVoting = votingKey === `comments-${comment.id}` || votingKey === `comment-${comment.id}`;
 
     const handleUsernameClick = () => {
         if (comment.userId) navigateToProfile(comment.userId);
@@ -79,7 +85,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
                     ) : (
                         // Render normal comment view
                         <>
-                             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                            <div className="bg-white/80 border border-slate-200 rounded-lg p-3 shadow-sm">
                                 <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
                                     <div className="flex items-center space-x-2">
                                         <button onClick={handleUsernameClick} className="font-semibold text-slate-700 hover:text-indigo-600 hover:underline focus:outline-none"> {comment.username} </button>
@@ -94,14 +100,18 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
                                         </div>
                                     )}
                                 </div>
-                                <p className="text-sm text-slate-800 whitespace-pre-wrap break-words">{comment.content}</p> {/* Use pre-wrap for line breaks */}
+                                <article className="prose prose-sm max-w-none prose-slate prose-a:text-indigo-600 hover:prose-a:text-indigo-800 prose-code:before:content-none prose-code:after:content-none prose-code:bg-slate-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-slate-700 prose-pre:bg-slate-900 prose-pre:text-slate-100 prose-pre:rounded-md prose-pre:p-3">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                        {comment.content || '*Không có nội dung*'}
+                                    </ReactMarkdown>
+                                </article>
                             </div>
                             {/* Actions (Vote, Reply) - Only show if not editing */}
                             <div className="flex items-center space-x-4 mt-1 pl-1 text-xs">
                                 <div className="flex items-center space-x-1 text-slate-500">
-                                    <button onClick={() => handleVote("comments", comment.id, "up")} disabled={!currentUser} className={`p-1 rounded ${userVote === 'up' ? 'text-indigo-600 bg-indigo-100' : 'hover:bg-slate-100 disabled:text-slate-300'}`} aria-label="Upvote" title="Upvote"> <ArrowUp className="w-3.5 h-3.5" /> </button>
+                                    <button onClick={() => handleVote("comments", comment.id, "up")} disabled={!currentUser || isVoting} className={`p-1 rounded ${userVote === 'up' ? 'text-indigo-600 bg-indigo-100' : 'hover:bg-slate-100 disabled:text-slate-300'}`} aria-label="Upvote" title="Upvote"> <ArrowUp className="w-3.5 h-3.5" /> </button>
                                     <span className={`font-semibold w-4 text-center ${voteCount > 0 ? 'text-indigo-600' : voteCount < 0 ? 'text-red-600' : ''}`}> {voteCount} </span>
-                                    <button onClick={() => handleVote("comments", comment.id, "down")} disabled={!currentUser} className={`p-1 rounded ${userVote === 'down' ? 'text-red-600 bg-red-100' : 'hover:bg-slate-100 disabled:text-slate-300'}`} aria-label="Downvote" title="Downvote"> <ArrowDown className="w-3.5 h-3.5" /> </button>
+                                    <button onClick={() => handleVote("comments", comment.id, "down")} disabled={!currentUser || isVoting} className={`p-1 rounded ${userVote === 'down' ? 'text-red-600 bg-red-100' : 'hover:bg-slate-100 disabled:text-slate-300'}`} aria-label="Downvote" title="Downvote"> <ArrowDown className="w-3.5 h-3.5" /> </button>
                                 </div>
                                 <button
                                     onClick={() => { setReplyingTo(isReplying ? null : comment.id); setEditingItemId(null); setEditingItemType(null); }} // Cancel edit if starting reply

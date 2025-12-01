@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { useAppContext } from '../hooks/useAppContext';
 import { ProblemEditorForm } from '../components/Problem/ProblemEditorForm';
@@ -27,9 +27,26 @@ export const ProblemEditorPage: React.FC = () => {
     if (!currentUser || (currentUser.role !== 'owner' && currentUser.role !== 'creator')) {
         return <div className="p-8 text-center text-red-600">Bạn không có quyền tạo hoặc chỉnh sửa bài toán.</div>;
     }
-     if (!editingProblem) {
+    if (!editingProblem) {
          return <div className="p-8 text-center text-slate-500">Không có bài toán nào đang được chỉnh sửa.</div>;
      }
+
+    // Fetch full detail (including evaluation_script) when missing to restore script content
+    useEffect(() => {
+        const fetchDetailIfNeeded = async () => {
+            if (!editingProblem || editingProblem === 'new') return;
+            if (editingProblem.evaluationScript) return;
+            try {
+                const data = await api.get(`/problems/${editingProblem.id}`);
+                if (data?.problem) {
+                    setEditingProblem(data.problem);
+                }
+            } catch (e) {
+                console.error("Không lấy được chi tiết bài toán để khôi phục script:", e);
+            }
+        };
+        fetchDetailIfNeeded();
+    }, [editingProblem, api, setEditingProblem]);
 
 
     const handleSaveProblem = async (

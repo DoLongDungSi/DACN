@@ -54,6 +54,7 @@ interface AppContextType {
     toastType: 'success' | 'error' | 'info' | null;
     editingItemId: number | null; // ID of post/comment being edited
     editingItemType: 'post' | 'comment' | null; // Type of item being edited
+    votingKey: string | null; // Current vote in-flight (prevents spam)
 
 
     // Setters
@@ -86,6 +87,7 @@ interface AppContextType {
     setShowNewPostModal: React.Dispatch<React.SetStateAction<boolean>>;
     setReplyingTo: React.Dispatch<React.SetStateAction<number | null>>;
     setAdminSubPage: React.Dispatch<React.SetStateAction<'users' | 'tags-metrics'>>;
+    setVotingKey: React.Dispatch<React.SetStateAction<string | null>>;
     showToast: (message: string, type: 'success' | 'error' | 'info') => void;
     clearToast: () => void;
     setEditingItemId: React.Dispatch<React.SetStateAction<number | null>>;
@@ -175,6 +177,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [toastType, setToastType] = useState<'success' | 'error' | 'info' | null>(null);
     const [editingItemId, setEditingItemId] = useState<number | null>(null);
     const [editingItemType, setEditingItemType] = useState<'post' | 'comment' | null>(null);
+    const [votingKey, setVotingKey] = useState<string | null>(null);
 
 
      // --- Toast Functions ---
@@ -551,7 +554,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // --- Discussion Handlers ---
     const handlePostSubmit = useCallback(async (title: string, content: string) => { if (!selectedProblem) { showToast("Lỗi: Không có bài toán được chọn.", "error"); return; } if (!currentUser) { showToast("Bạn cần đăng nhập để đăng bài.", "error"); return; } setLoading(true); try { const data = await api.post('/discussion/posts', { title, content, problemId: selectedProblem.id }); await fetchAllData(); setShowNewPostModal(false); setViewingPost(data.post); showToast("Đăng bài thành công!", "success"); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, selectedProblem, currentUser, showToast, setLoading, fetchAllData, setShowNewPostModal, setViewingPost ]);
     const handleCommentSubmit = useCallback(async (postId: number, content: string, parentId: number | null) => { if (!currentUser) { showToast("Bạn cần đăng nhập để bình luận.", "error"); return; } try { const data = await api.post('/discussion/comments', { content, postId, parentId }); setReplyingTo(null); setComments(prev => [...prev, data.comment]); showToast("Bình luận thành công!", "success"); await fetchAllData(); } catch (err) { /* API helper shows toast */ await fetchAllData(); } }, [api, currentUser, showToast, setReplyingTo, setComments, fetchAllData]);
-    const handleVote = useCallback(async (targetType: 'posts' | 'comments', targetId: number, voteType: 'up' | 'down') => { if (!currentUser) { showToast("Bạn cần đăng nhập để bỏ phiếu.", "error"); return; } const userId = currentUser.id; const endpoint = `/discussion/${targetType}/${targetId}/vote`; const optimisticUpdate = (items: any[], id: number) => { return items.map(item => { if (item.id !== id) return item; const upvotes = item.upvotedBy || []; const downvotes = item.downvotedBy || []; const wasUpvoted = upvotes.includes(userId); const wasDownvoted = downvotes.includes(userId); let newUpvotes = upvotes.filter((uid: number) => uid !== userId); let newDownvotes = downvotes.filter((uid: number) => uid !== userId); if (voteType === 'up') { if (!wasUpvoted) newUpvotes.push(userId); } else if (voteType === 'down') { if (!wasDownvoted) newDownvotes.push(userId); } return { ...item, upvotedBy: newUpvotes, downvotedBy: newDownvotes }; }); }; if (targetType === 'posts') { setPosts(prev => optimisticUpdate(prev, targetId)); if (viewingPost?.id === targetId) setViewingPost(prev => prev ? optimisticUpdate([prev], targetId)[0] : null); } else setComments(prev => optimisticUpdate(prev, targetId)); try { const data = await api.post(endpoint, { voteType }); if (targetType === 'posts') { setPosts(prev => prev.map(p => p.id === targetId ? data.post : p)); if (viewingPost?.id === targetId) setViewingPost(data.post); } else { setComments(prev => prev.map(c => c.id === targetId ? data.comment : c)); } } catch (err) { showToast("Bỏ phiếu thất bại. Đang khôi phục...", "error"); fetchAllData(); } }, [api, currentUser, viewingPost, fetchAllData, showToast, setPosts, setViewingPost, setComments]);
+    const handleVote = useCallback(async (targetType: 'posts' | 'comments', targetId: number, voteType: 'up' | 'down') => {
+        if (!currentUser) {
+            showToast("Bạn cần đăng nhập để bỏ phiếu.", "error");
+            return;
+        }
+        const key = `${targetType}-${targetId}`;
+        if (votingKey === key) return; // prevent spam/double taps while in-flight
+        setVotingKey(key);
+        const endpoint = `/discussion/${targetType}/${targetId}/vote`;
+        try {
+            const data = await api.post(endpoint, { voteType });
+            if (targetType === 'posts') {
+                setPosts(prev => prev.map(p => p.id === targetId ? data.post : p));
+                if (viewingPost?.id === targetId) setViewingPost(data.post);
+            } else {
+                setComments(prev => prev.map(c => c.id === targetId ? data.comment : c));
+            }
+        } catch (err: any) {
+            const msg = err?.message || "Bỏ phiếu thất bại.";
+            showToast(msg, "error");
+            await fetchAllData();
+        } finally {
+            setVotingKey(null);
+        }
+    }, [api, currentUser, viewingPost, fetchAllData, showToast, setPosts, setViewingPost, setComments, votingKey]);
     const handleUpdatePost = useCallback(async (postId: number, title: string, content: string) => { setLoading(true); try { const data = await api.put(`/discussion/posts/${postId}`, { title, content }); setPosts(prev => prev.map(p => p.id === postId ? data.post : p)); if (viewingPost?.id === postId) setViewingPost(data.post); setEditingItemId(null); setEditingItemType(null); showToast("Cập nhật bài viết thành công.", "success"); } catch (e) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, setLoading, setPosts, viewingPost, setViewingPost, setEditingItemId, setEditingItemType, showToast]);
     // *** MODIFIED handleDeletePost: Removed finally, moved setLoading(false) ***
     const handleDeletePost = useCallback((postId: number) => {
@@ -581,7 +608,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setLoading(true);
             try {
                 await api.delete(`/discussion/comments/${commentId}`);
-                const getRepliesRecursive = (id: number, all: DiscussionComment[]): number[] => { /* ... */ return []; /* simplified for brevity */ }; // Keep function def
+                const getRepliesRecursive = (id: number, all: DiscussionComment[]): number[] => {
+                    const directChildren = all.filter(c => c.parentId === id).map(c => c.id);
+                    return directChildren.reduce<number[]>((acc, childId) => {
+                        return acc.concat([childId, ...getRepliesRecursive(childId, all)]);
+                    }, []);
+                };
                 const repliesToDelete = getRepliesRecursive(commentId, comments);
                 setComments(prev => prev.filter(c => c.id !== commentId && !repliesToDelete.includes(c.id))); // Optimistic removal
                 closeConfirmModal();
@@ -602,15 +634,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // --- Hint Handler ---
     const handleGetHint = useCallback(async () => {
         if (!selectedProblem) return;
-        if (!currentUser) {
-            showToast("Bạn cần đăng nhập để nhận gợi ý.", "error");
-            return;
-        }
         setIsGeneratingHint(true);
         setProblemHint(null);
         setError('');
+
+        if (!currentUser) {
+            showToast("Bạn đang xem với tư cách khách. Gợi ý sẽ ở mức cơ bản.", "info");
+        }
+
         try {
             const data = await api.post(`/problems/${selectedProblem.id}/hint`);
+            if (data?.warning) {
+                showToast(data.warning, 'info');
+            }
             if (!data?.hint) {
                 throw new Error("Không nhận được gợi ý.");
             }
@@ -642,7 +678,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         imgSrc, setImgSrc, isAvatarModalOpen, setIsAvatarModalOpen, originalFileName, setOriginalFileName,
         problemHint, setProblemHint, isGeneratingHint, setIsGeneratingHint, leftPanelTab, setLeftPanelTab, rightPanelTab, setRightPanelTab,
         viewingPost, setViewingPost, showNewPostModal, setShowNewPostModal, replyingTo, setReplyingTo, adminSubPage, setAdminSubPage,
-        toastMessage, toastType, editingItemId, setEditingItemId, editingItemType, setEditingItemType,
+        toastMessage, toastType, editingItemId, setEditingItemId, editingItemType, setEditingItemType, votingKey, setVotingKey,
         api, fetchAllData, handleSignup, handleLogin, handleLogout, handleSaveProblem, handleDeleteProblem, handleSettingsUpdate, handleChangePassword, handleDeleteAccount,
         handleAdminUpdateUserRole, handleAdminToggleBanUser, handleAdminDeleteUser, handleAdminAddTag, handleAdminDeleteTag, handleAdminAddMetric, handleAdminDeleteMetric,
         handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
@@ -652,7 +688,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser, users, problems, allTags, allMetrics, submissions, posts, comments, leaderboardData, page, editingProblem, currentView, authMode,
         selectedProblem, viewingUserId, loading, error, confirmModal, imgSrc, isAvatarModalOpen, originalFileName,
         problemHint, isGeneratingHint, leftPanelTab, rightPanelTab, viewingPost, showNewPostModal, replyingTo, adminSubPage,
-        toastMessage, toastType, editingItemId, editingItemType,
+        toastMessage, toastType, editingItemId, editingItemType, votingKey, setVotingKey,
         api, fetchAllData, handleSignup, handleLogin, handleLogout, handleSaveProblem, handleDeleteProblem, handleSettingsUpdate, handleChangePassword, handleDeleteAccount,
         handleAdminUpdateUserRole, handleAdminToggleBanUser, handleAdminDeleteUser, handleAdminAddTag, handleAdminDeleteTag, handleAdminAddMetric, handleAdminDeleteMetric,
         handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
