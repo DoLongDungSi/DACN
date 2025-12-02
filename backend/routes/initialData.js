@@ -7,6 +7,8 @@ const path = require('path');
 
 const router = express.Router();
 
+const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../storage');
+
 const parseDatasets = (datasets) => {
   if (!datasets) return [];
   if (Array.isArray(datasets)) return datasets;
@@ -14,17 +16,27 @@ const parseDatasets = (datasets) => {
   catch (e) { return []; }
 };
 
-const loadDatasetFromDisk = (filename) => {
-  if (!filename) return null;
-  const sanitizedFilename = path.basename(filename);
-  const candidatePaths = [
-    path.join('/usr/src/test', sanitizedFilename),
-    path.join(__dirname, '../../test', sanitizedFilename),
-    path.join(process.cwd(), 'test', sanitizedFilename),
-  ];
+const resolveFilePath = (fileRef) => {
+  if (!fileRef) return null;
+  if (path.isAbsolute(fileRef)) return fileRef;
+  return path.join(DATA_ROOT, fileRef);
+};
+
+const loadDatasetFromDisk = (entry) => {
+  if (!entry) return null;
+  const candidatePaths = [];
+  if (entry.path) candidatePaths.push(resolveFilePath(entry.path));
+  if (entry.filename) {
+    const sanitizedFilename = path.basename(entry.filename);
+    candidatePaths.push(
+      path.join('/usr/src/test', sanitizedFilename),
+      path.join(__dirname, '../../test', sanitizedFilename),
+      path.join(process.cwd(), 'test', sanitizedFilename),
+    );
+  }
   for (const candidate of candidatePaths) {
     try {
-      if (fs.existsSync(candidate)) {
+      if (candidate && fs.existsSync(candidate)) {
         console.log(`[datasets] Reading dataset file from disk: ${candidate}`);
         return fs.readFileSync(candidate, 'utf8');
       }
@@ -32,7 +44,7 @@ const loadDatasetFromDisk = (filename) => {
       console.error('[datasets] Error reading dataset file', candidate, e);
     }
   }
-  console.warn(`[datasets] Dataset fallback not found for filename: ${sanitizedFilename}`);
+  console.warn(`[datasets] Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
   return null;
 };
 
@@ -46,21 +58,9 @@ const buildDatasetList = (problemRow) => {
       const sanitized = {
         split,
         filename: entry.filename || `${split}.csv`,
+        path: entry.path,
         download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
       };
-      if (split !== 'ground_truth') {
-        if (entry.content) {
-          sanitized.content = entry.content;
-        } else if (split === 'public_test' && problemRow.public_test_content) {
-          sanitized.content = problemRow.public_test_content;
-        } else {
-          const fallback = loadDatasetFromDisk(entry.filename);
-          if (fallback) {
-            console.log(`Loaded dataset fallback for problem ${problemRow.id} (${entry.filename})`);
-            sanitized.content = fallback;
-          }
-        }
-      }
       return sanitized;
     })
     .filter(entry => entry.split !== 'ground_truth');

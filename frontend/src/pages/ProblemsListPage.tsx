@@ -39,7 +39,7 @@ export const ProblemsListPage: React.FC = () => {
          }
      };
 
-     const handleDeleteClick = (e: React.MouseEvent, id: number, authorId: number | undefined) => {
+     const handleDeleteClick = (e: React.MouseEvent, id: number, authorId: number | null | undefined) => {
          e.stopPropagation();
          if (currentUser?.role === 'owner' || authorId === currentUser?.id) {
              handleDeleteProblem(id);
@@ -104,7 +104,7 @@ export const ProblemsListPage: React.FC = () => {
                 {canCreate && (
                     <button
                         onClick={() => { setEditingProblem("new"); navigate('problem-editor'); }}
-                        className="w-full sm:w-auto bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold py-2.5 px-5 rounded-lg flex items-center justify-center hover:from-blue-700 hover:to-purple-700 transition-all shadow-md hover:shadow-lg text-sm flex-shrink-0" // Added flex-shrink-0
+                        className="w-full sm:w-auto bg-indigo-600 text-white font-bold py-2.5 px-5 rounded-lg flex items-center justify-center hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg text-sm flex-shrink-0"
                         >
                         <PlusCircle className="mr-2 h-4 w-4" />
                         Tạo bài toán mới
@@ -202,7 +202,7 @@ export const ProblemsListPage: React.FC = () => {
                     {problems.length === 0 && canCreate && (
                          <button
                             onClick={() => { setEditingProblem("new"); navigate('problem-editor'); }}
-                            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center hover:from-blue-700 hover:to-purple-700 transition-all shadow-md hover:shadow-lg text-sm mx-auto"
+                            className="bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg text-sm mx-auto"
                             >
                             <PlusCircle className="mr-2 h-4 w-4" />
                             Tạo bài toán đầu tiên
@@ -245,7 +245,7 @@ export const ProblemsListPage: React.FC = () => {
                                                 <Edit2 className="w-4 h-4" />
                                             </button>
                                              <button
-                                                  onClick={(e) => handleDeleteClick(e, problem.id, problem.authorId)}
+                                                  onClick={(e) => handleDeleteClick(e, problem.id, problem.authorId ?? undefined)}
                                                 className="text-slate-400 hover:text-red-600 p-1.5 rounded-md hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-1 z-10"
                                                 aria-label={`Delete ${problem.name}`}
                                                  title="Xóa"
@@ -300,4 +300,3 @@ export const ProblemsListPage: React.FC = () => {
         </div>
     );
 };
-

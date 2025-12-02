@@ -118,12 +118,18 @@ export const Header: React.FC = () => {
                         )}
                     </div>
                  ) : (
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setCurrentView('auth')}
+                            className="font-semibold px-3 py-2 rounded-lg text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors text-sm"
+                        >
+                            Đăng nhập
+                        </button>
                         <button
                             onClick={() => setCurrentView('auth')}
                             className="font-semibold px-4 py-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
                         >
-                            Đăng nhập / Đăng ký
+                            Đăng ký
                         </button>
                     </div>
                  )}

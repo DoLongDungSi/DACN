@@ -7,6 +7,12 @@ const multer = require('multer');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+
+// Storage root for datasets (train/test/gt) per problem
+const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../storage');
+if (!fs.existsSync(DATA_ROOT)) {
+    fs.mkdirSync(DATA_ROOT, { recursive: true });
+}
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
 const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions';
@@ -22,16 +28,26 @@ const parseDatasets = (datasets) => {
     catch (e) { return []; }
 };
 
-const loadDatasetFromDisk = (filename) => {
-    if (!filename) return null;
-    const sanitizedFilename = path.basename(filename);
-    const candidatePaths = [
-        path.join('/usr/src/test', sanitizedFilename),
-        path.join(__dirname, '../../test', sanitizedFilename),
-        path.join(process.cwd(), 'test', sanitizedFilename),
-    ];
+const resolveFilePath = (fileRef) => {
+    if (!fileRef) return null;
+    if (path.isAbsolute(fileRef)) return fileRef;
+    return path.join(DATA_ROOT, fileRef);
+};
+
+const loadDatasetFromDisk = (entry) => {
+    if (!entry) return null;
+    const candidatePaths = [];
+    if (entry.path) candidatePaths.push(resolveFilePath(entry.path));
+    if (entry.filename) {
+        const sanitizedFilename = path.basename(entry.filename);
+        candidatePaths.push(
+            path.join('/usr/src/test', sanitizedFilename),
+            path.join(__dirname, '../../test', sanitizedFilename),
+            path.join(process.cwd(), 'test', sanitizedFilename),
+        );
+    }
     for (const candidate of candidatePaths) {
-        console.log(`Checking dataset path: ${candidate}`);
+        if (!candidate) continue;
         try {
             if (fs.existsSync(candidate)) {
                 console.log(`Reading dataset file from disk: ${candidate}`);
@@ -41,8 +57,34 @@ const loadDatasetFromDisk = (filename) => {
             console.error('Error reading dataset file', candidate, e);
         }
     }
-    console.warn(`Dataset fallback not found for filename: ${JSON.stringify(sanitizedFilename)}`);
+    console.warn(`Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
     return null;
+};
+
+const ensureProblemDir = (problemId) => {
+    const dir = path.join(DATA_ROOT, `problem_${problemId}`);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+};
+
+const saveUploadedFile = (problemId, file, split) => {
+    const dir = ensureProblemDir(problemId);
+    const base = path.basename(file.originalname);
+    const unique = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const finalName = `${split}-${unique}-${base}`;
+    const fullPath = path.join(dir, finalName);
+    fs.writeFileSync(fullPath, file.buffer);
+    return { filename: base, path: path.relative(DATA_ROOT, fullPath) };
+};
+
+const deleteFileIfExists = (fileRef) => {
+    const full = resolveFilePath(fileRef);
+    if (!full) return;
+    try {
+        if (fs.existsSync(full)) fs.unlinkSync(full);
+    } catch (e) {
+        console.warn('Unable to delete old file', full, e.message || e);
+    }
 };
 
 const buildDatasetList = (problemRow) => {
@@ -55,22 +97,10 @@ const buildDatasetList = (problemRow) => {
             const sanitized = {
                 split,
                 filename: entry.filename || `${split}.csv`,
+                path: entry.path,
                 download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
             };
-            if (split !== 'ground_truth') {
-                if (entry.content) {
-                    sanitized.content = entry.content;
-                } else if (split === 'public_test' && problemRow.public_test_content) {
-                    sanitized.content = problemRow.public_test_content;
-                } else {
-                    const fallback = loadDatasetFromDisk(entry.filename);
-                    if (fallback) {
-                        console.log(`Loaded dataset fallback for problem ${problemRow.id} (${entry.filename})`);
-                        sanitized.content = fallback;
-                    }
-                }
-            }
-            console.log('Dataset entry for problem', problemRow.id, JSON.stringify({...sanitized, content: sanitized.content ? `${sanitized.content.length} chars` : undefined}));
+            console.log('Dataset entry for problem', problemRow.id, JSON.stringify(sanitized));
             return sanitized;
         })
         .filter(entry => entry.split !== 'ground_truth');
@@ -151,65 +181,30 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
        const normalized = {
            split: entry.split,
            filename: entry.filename,
+           path: entry.path,
        };
-       if (entry.content && entry.split !== 'ground_truth') {
-           normalized.content = entry.content;
-       }
        return normalized;
    };
 
-   let datasets = (isUpdate && Array.isArray(existingDatasets))
-       ? existingDatasets.map(sanitizeDatasetEntry).filter(Boolean)
-       : [];
-   let groundTruthContent = null;
-   let publicTestContent = null;
+   // Seed datasets from DB (safer than trusting client) when updating
+   let existingDbDatasets = [];
+   let existingGroundTruthPath = null;
+   let existingPublicTestPath = null;
+
+   // --- File buffers (will be written to disk after we have problemId) ---
+   let datasets = [];
+   let groundTruthPath = null;
+   let publicTestPath = null;
    const files = req.files;
 
-   const addDatasetEntry = (split, filename, content = null) => {
-       datasets = datasets.filter(d => d && d.split !== split);
-       const entry = { split, filename };
-       if (content && split !== 'ground_truth') {
-           entry.content = content;
-       }
-       datasets.push(entry);
-   };
-
-   // Process Train CSV
-   if (files && files.trainCsv && files.trainCsv[0]) {
-       const file = files.trainCsv[0];
-       const trainContent = file.buffer.toString('utf-8');
-       addDatasetEntry('train', file.originalname, trainContent);
-       console.log(`Processed dataset file (train): ${file.originalname}`);
-   }
-
-   // Process Test Public CSV (Save content)
-   if (files && files.testCsv && files.testCsv[0]) {
-       const file = files.testCsv[0];
-       publicTestContent = file.buffer.toString('utf-8');
-       addDatasetEntry('public_test', file.originalname, publicTestContent);
-       console.log(`Processed public test file: ${file.originalname}, Content length: ${publicTestContent?.length ?? 'N/A'}`);
-   }
-
-   // Process Ground Truth CSV (Save content)
-   if (files && files.groundTruthCsv && files.groundTruthCsv[0]) {
-       const file = files.groundTruthCsv[0];
-       groundTruthContent = file.buffer.toString('utf-8');
-       console.log(`Processed ground truth file: ${file.originalname}, Content length: ${groundTruthContent?.length ?? 'N/A'}`);
-       console.log(`GRND TRUTH CHECK: Is null? ${groundTruthContent === null}, Is undefined? ${groundTruthContent === undefined}, Is empty? ${groundTruthContent === ""}`);
-       addDatasetEntry('ground_truth', file.originalname);
-   } else {
-        console.log("No 'groundTruthCsv' field/file found in req.files AFTER processing."); // Log again after trying to access
-   }
+   // Process Train CSV (buffer will be written after we know problemId)
+   const uploadedTrain = files && files.trainCsv && files.trainCsv[0] ? files.trainCsv[0] : null;
+   const uploadedTest = files && files.testCsv && files.testCsv[0] ? files.testCsv[0] : null;
+   const uploadedGT = files && files.groundTruthCsv && files.groundTruthCsv[0] ? files.groundTruthCsv[0] : null;
 
 
    // --- Validation after processing files ---
-    const hasTrainMeta = datasets.some(d => d.split === 'train');
-    const hasPublicTestMeta = datasets.some(d => d.split === 'public_test');
-
-    if (!isUpdate && !hasTrainMeta) { return res.status(400).json({ message: `Missing required dataset file: train.` }); }
-    if (!isUpdate && !hasPublicTestMeta) { return res.status(400).json({ message: `Missing required dataset file: public test.` }); }
-    if (isUpdate && !hasTrainMeta) { console.log("Train dataset metadata missing, allowing update."); }
-    if (isUpdate && !hasPublicTestMeta) { console.log("Public test dataset metadata missing, allowing update."); }
+    // Validation of presence will happen after loading existing metadata
 
 
    // --- Database Transaction ---
@@ -218,108 +213,122 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
 
    try {
       client = await pool.connect();
+      await client.query('BEGIN');
 
-      // Determine groundTruthContent to save
-      if (!groundTruthContent && isUpdate && problemId) {
-          const existingRes = await client.query('SELECT ground_truth_content FROM problems WHERE id = $1', [problemId]);
-          if (existingRes.rows.length > 0 && existingRes.rows[0].ground_truth_content) {
-              groundTruthContent = existingRes.rows[0].ground_truth_content;
-              console.log("Update: No new GT file, keeping existing.");
-          } else {
-               console.error(`Update Error: Existing GT content not found for problem ${problemId}, and no new file provided.`);
-               throw new Error('Ground truth content is missing for update and not provided.');
-          }
-      } else if (!groundTruthContent && !isUpdate) {
-            console.error(`Create Error: groundTruthContent is falsy before DB check. isUpdate=${isUpdate}.`);
-            throw new Error('Ground truth file/content missing when creating a new problem.');
+      if (isUpdate) {
+          const existingRes = await client.query('SELECT author_id, datasets, ground_truth_content, public_test_content FROM problems WHERE id = $1', [problemId]);
+          if (existingRes.rows.length === 0) { await client.query('ROLLBACK'); throw new Error('Problem not found.'); }
+          if (userRole !== 'owner' && existingRes.rows[0].author_id !== authorId) { await client.query('ROLLBACK'); throw new Error('Not authorized to update this problem.'); }
+          existingDbDatasets = parseDatasets(existingRes.rows[0].datasets) || [];
+          datasets = existingDbDatasets.map(sanitizeDatasetEntry).filter(Boolean);
+          groundTruthPath = existingRes.rows[0].ground_truth_content || null;
+          publicTestPath = existingRes.rows[0].public_test_content || null;
+      } else {
+          // Pre-reserve an ID so we can place files on disk with stable folder names
+          const idRes = await client.query("SELECT nextval('problems_id_seq') as id");
+          savedProblemId = idRes.rows[0].id;
+          datasets = [];
       }
 
-       // Determine publicTestContent to save
-       if (!publicTestContent && isUpdate && problemId) {
-           const existingRes = await client.query('SELECT public_test_content FROM problems WHERE id = $1', [problemId]);
-           if (existingRes.rows.length > 0 && existingRes.rows[0].public_test_content) {
-               publicTestContent = existingRes.rows[0].public_test_content;
-               console.log("Update: No new public test file, keeping existing.");
-           } else {
-               console.error(`Update Error: Existing public test content not found for problem ${problemId}, and no new file provided.`);
-               throw new Error('Public test content is missing for update and not provided.');
-           }
-       } else if (!publicTestContent && !isUpdate) {
-           console.error(`Create Error: publicTestContent is falsy. isUpdate=${isUpdate}.`);
-           throw new Error('Public test file/content missing when creating a new problem.');
-       }
+      // Helpers for dataset replacement
+      const replaceDatasetEntry = (split, savedInfo) => {
+          if (!savedInfo) return;
+          const existing = datasets.find(d => d.split === split);
+          if (existing?.path) deleteFileIfExists(existing.path);
+          datasets = datasets.filter(d => d && d.split !== split);
+          datasets.push({ split, filename: savedInfo.filename, path: savedInfo.path });
+      };
 
-        // START TRANSACTION
-        await client.query('BEGIN');
+      // Write uploaded files to disk now that we know problemId
+      if (uploadedTrain) {
+          const saved = saveUploadedFile(savedProblemId, uploadedTrain, 'train');
+          replaceDatasetEntry('train', saved);
+          console.log(`Saved train dataset to ${saved.path}`);
+      }
+      if (uploadedTest) {
+          const saved = saveUploadedFile(savedProblemId, uploadedTest, 'public_test');
+          replaceDatasetEntry('public_test', saved);
+          publicTestPath = saved.path;
+          console.log(`Saved public test dataset to ${saved.path}`);
+      }
+      if (uploadedGT) {
+          if (groundTruthPath) deleteFileIfExists(groundTruthPath);
+          const saved = saveUploadedFile(savedProblemId, uploadedGT, 'ground_truth');
+          groundTruthPath = saved.path;
+          // We still keep metadata entry for GT just to track filename/path internally (not exposed)
+          replaceDatasetEntry('ground_truth', saved);
+          console.log(`Saved ground truth dataset to ${saved.path}`);
+      }
 
-        // Ownership check for updates
-        if (isUpdate && userRole !== 'owner') {
-            const ownerCheck = await client.query('SELECT author_id FROM problems WHERE id = $1', [problemId]);
-            if (ownerCheck.rows.length === 0) { await client.query('ROLLBACK'); throw new Error('Problem not found.'); }
-            if (ownerCheck.rows[0].author_id !== authorId) { await client.query('ROLLBACK'); throw new Error('Not authorized to update this problem.'); }
+      // Validate presence of required datasets
+      const hasTrainMeta = datasets.some(d => d.split === 'train' && d.path);
+      const hasPublicTestMeta = datasets.some(d => d.split === 'public_test' && d.path);
+      if (!hasTrainMeta) { throw new Error('Missing required dataset file: train.'); }
+      if (!hasPublicTestMeta) { throw new Error('Missing required dataset file: public test.'); }
+      if (!groundTruthPath) { throw new Error('Ground truth file missing.'); }
+
+      // Insert/Update Problem
+      const datasetsJson = JSON.stringify(datasets);
+      if (isUpdate) {
+         console.log(`Updating problem ${problemId}`);
+         const updateQuery = `UPDATE problems SET name=$1, difficulty=$2, content=$3, problem_type=$4, datasets=$5, evaluation_script=$6, ground_truth_content=$7, public_test_content=$8 WHERE id = $9 RETURNING id`;
+         const updateResult = await client.query(updateQuery, [name, difficulty, content, problemType, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath, problemId]);
+          if (updateResult.rowCount === 0) { await client.query('ROLLBACK'); throw new Error('Update failed. Problem not found or no changes.'); }
+          savedProblemId = updateResult.rows[0].id;
+      } else {
+         console.log(`Creating new problem ${savedProblemId}`);
+         const insertQuery = `INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`;
+         const insertResult = await client.query(insertQuery, [savedProblemId, name, difficulty, content, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath]);
+         savedProblemId = insertResult.rows[0].id;
+      }
+      console.log(`Problem ${isUpdate ? 'updated' : 'created'} ID: ${savedProblemId}`);
+
+      // Tags & Metrics
+      await client.query('DELETE FROM problem_tags WHERE problem_id = $1', [savedProblemId]);
+      await client.query('DELETE FROM problem_metrics WHERE problem_id = $1', [savedProblemId]);
+      const validTagIds = tagIds.filter(id => typeof id === 'number' && !isNaN(id));
+      const validMetricIds = metricIds.filter(id => typeof id === 'number' && !isNaN(id));
+      const tagPromises = validTagIds.map(tagId => client.query('INSERT INTO problem_tags (problem_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [savedProblemId, tagId]));
+      const metricPromises = validMetricIds.map((metricId, index) => client.query('INSERT INTO problem_metrics (problem_id, metric_id, is_primary) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [savedProblemId, metricId, index === 0]));
+      await Promise.all([...tagPromises, ...metricPromises]);
+      console.log(`Tags/Metrics updated for problem ID: ${savedProblemId}`);
+
+      // Commit Transaction
+      await client.query('COMMIT');
+      console.log(`Transaction committed for problem ID: ${savedProblemId}`);
+
+      // Fetch final data for response
+       const finalProblemRes = await pool.query(
+           `SELECT p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
+                   p.evaluation_script,
+                   u.username as author_username, p.datasets,
+                   (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
+                   (CASE WHEN p.ground_truth_content IS NOT NULL AND p.ground_truth_content != '' THEN true ELSE false END) as has_ground_truth,
+                   (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
+                   COALESCE(tags.tag_ids, '{}'::int[]) as tags,
+                   COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
+                   COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
+                   COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
+            FROM problems p
+            LEFT JOIN users u ON p.author_id = u.id
+            LEFT JOIN (SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids FROM problem_tags WHERE problem_id = $1 GROUP BY problem_id) tags ON p.id = tags.problem_id
+            LEFT JOIN (SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids FROM problem_metrics WHERE problem_id = $1 GROUP BY problem_id) metrics_agg ON p.id = metrics_agg.problem_id
+            LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('id', m.id, 'key', m.key, 'direction', m.direction, 'isPrimary', pm.is_primary) ORDER BY m.key) as details FROM problem_metrics pm JOIN metrics m ON pm.metric_id = m.id WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_details ON p.id = metrics_details.problem_id
+            LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary) ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id) as links FROM problem_metrics pm WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_links ON p.id = metrics_links.problem_id
+            WHERE p.id = $1`,
+           [savedProblemId]
+       );
+
+        if (finalProblemRes.rows.length === 0) {
+            console.error(`Consistency Error: Could not retrieve problem data (ID: ${savedProblemId}) immediately after saving.`);
+            throw new Error('Could not retrieve problem data after saving.');
         }
+        console.log(`Successfully saved/fetched problem ${savedProblemId} for response.`);
+        const responseProblem = finalProblemRes.rows[0];
+        responseProblem.metrics_details = responseProblem.metrics_details || []; // Ensure it's an array
 
-        // Insert/Update Problem
-        const datasetsJson = JSON.stringify(datasets);
-        if (isUpdate) {
-           console.log(`Updating problem ${problemId}`);
-           const updateQuery = `UPDATE problems SET name=$1, difficulty=$2, content=$3, problem_type=$4, datasets=$5, evaluation_script=$6, ground_truth_content=$7, public_test_content=$8 WHERE id = $9 RETURNING id`;
-           const updateResult = await client.query(updateQuery, [name, difficulty, content, problemType, datasetsJson, evaluationScriptContent, groundTruthContent, publicTestContent, problemId]);
-            if (updateResult.rowCount === 0) { await client.query('ROLLBACK'); throw new Error('Update failed. Problem not found or no changes.'); }
-            savedProblemId = updateResult.rows[0].id;
-        } else {
-           console.log(`Creating new problem`);
-           const insertQuery = `INSERT INTO problems (name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`;
-           const insertResult = await client.query(insertQuery, [name, difficulty, content, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthContent, publicTestContent]);
-           savedProblemId = insertResult.rows[0].id;
-        }
-        console.log(`Problem ${isUpdate ? 'updated' : 'created'} ID: ${savedProblemId}`);
-
-        // Tags & Metrics
-        await client.query('DELETE FROM problem_tags WHERE problem_id = $1', [savedProblemId]);
-        await client.query('DELETE FROM problem_metrics WHERE problem_id = $1', [savedProblemId]);
-        const validTagIds = tagIds.filter(id => typeof id === 'number' && !isNaN(id));
-        const validMetricIds = metricIds.filter(id => typeof id === 'number' && !isNaN(id));
-        const tagPromises = validTagIds.map(tagId => client.query('INSERT INTO problem_tags (problem_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [savedProblemId, tagId]));
-        const metricPromises = validMetricIds.map((metricId, index) => client.query('INSERT INTO problem_metrics (problem_id, metric_id, is_primary) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [savedProblemId, metricId, index === 0]));
-        await Promise.all([...tagPromises, ...metricPromises]);
-        console.log(`Tags/Metrics updated for problem ID: ${savedProblemId}`);
-
-        // Commit Transaction
-        await client.query('COMMIT');
-        console.log(`Transaction committed for problem ID: ${savedProblemId}`);
-
-        // Fetch final data for response
-         const finalProblemRes = await pool.query(
-             `SELECT p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
-                     u.username as author_username, p.datasets,
-                     (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-                     (CASE WHEN p.ground_truth_content IS NOT NULL AND p.ground_truth_content != '' THEN true ELSE false END) as has_ground_truth,
-                     (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
-                     COALESCE(tags.tag_ids, '{}'::int[]) as tags,
-                     COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
-                     COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
-                     COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
-              FROM problems p
-              LEFT JOIN users u ON p.author_id = u.id
-              LEFT JOIN (SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids FROM problem_tags WHERE problem_id = $1 GROUP BY problem_id) tags ON p.id = tags.problem_id
-              LEFT JOIN (SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids FROM problem_metrics WHERE problem_id = $1 GROUP BY problem_id) metrics_agg ON p.id = metrics_agg.problem_id
-              LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('id', m.id, 'key', m.key, 'direction', m.direction, 'isPrimary', pm.is_primary) ORDER BY m.key) as details FROM problem_metrics pm JOIN metrics m ON pm.metric_id = m.id WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_details ON p.id = metrics_details.problem_id
-              LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary) ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id) as links FROM problem_metrics pm WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_links ON p.id = metrics_links.problem_id
-              WHERE p.id = $1`,
-             [savedProblemId]
-         );
-
-          if (finalProblemRes.rows.length === 0) {
-              console.error(`Consistency Error: Could not retrieve problem data (ID: ${savedProblemId}) immediately after saving.`);
-              throw new Error('Could not retrieve problem data after saving.');
-          }
-          console.log(`Successfully saved/fetched problem ${savedProblemId} for response.`);
-          const responseProblem = finalProblemRes.rows[0];
-          responseProblem.metrics_details = responseProblem.metrics_details || []; // Ensure it's an array
-
-        // Send successful response
-        res.status(isUpdate ? 200 : 201).json({ problem: toCamelCase(responseProblem) });
+      // Send successful response
+      res.status(isUpdate ? 200 : 201).json({ problem: toCamelCase(responseProblem) });
 
    } catch (error) {
      if (client) { try { await client.query('ROLLBACK'); console.log("Transaction rolled back."); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
@@ -618,13 +627,12 @@ router.get('/:id/datasets/:split', async (req, res) => {
         const problem = problemRes.rows[0];
         const datasets = parseDatasets(problem.datasets);
         const entry = datasets.find(d => d && d.split === split);
-        let content = entry?.content || null;
+        let content = null;
         let filename = entry?.filename || `${split}.csv`;
 
-        if (!content && split === 'public_test') {
-            content = problem.public_test_content || loadDatasetFromDisk(entry?.filename);
-        } else if (!content) {
-            content = loadDatasetFromDisk(entry?.filename);
+        content = loadDatasetFromDisk(entry || { filename });
+        if (!content && split === 'public_test' && problem.public_test_content) {
+            content = loadDatasetFromDisk({ path: problem.public_test_content, filename });
         }
 
         if (!content) {
