@@ -5,17 +5,8 @@ const { authMiddleware } = require('../middleware/auth');
 const { singleUploadMiddleware } = require('../config/multer');
 const { toCamelCase } = require('../utils/helpers');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../storage');
-const resolveFilePath = (fileRef) => {
-    if (!fileRef) return null;
-    if (path.isAbsolute(fileRef)) return fileRef;
-    return path.join(DATA_ROOT, fileRef);
-};
-
 const router = express.Router();
+
 
 // --- Create Submission Route ---
 router.post(
@@ -51,22 +42,20 @@ router.post(
             }
 
             const evaluationScript = problemRes.rows[0].evaluation_script;
-            const groundTruthPath = problemRes.rows[0].ground_truth_content;
-            const publicTestPath = problemRes.rows[0].public_test_content;
+            const groundTruthContent = problemRes.rows[0].ground_truth_content;
+            const publicTestContent = problemRes.rows[0].public_test_content;
 
             // Check if all necessary data is present
             if (!evaluationScript) {
                 return res.status(500).json({ message: 'Evaluation script for this problem is missing.' });
             }
-            if (!groundTruthPath) {
-                 return res.status(500).json({ message: 'Ground truth file for this problem is missing.' });
+            if (!groundTruthContent) {
+                 return res.status(500).json({ message: 'Ground truth content for this problem is missing.' });
             }
-            if (!publicTestPath) {
-                return res.status(500).json({ message: 'Public test dataset file for this problem is missing.' });
+            if (!publicTestContent) {
+                return res.status(500).json({ message: 'Public test content for this problem is missing.' });
             }
 
-            const groundTruthContent = fs.readFileSync(resolveFilePath(groundTruthPath), 'utf8');
-            const publicTestContent = fs.readFileSync(resolveFilePath(publicTestPath), 'utf8');
 
 
             // --- Call Evaluation Microservice ---

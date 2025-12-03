@@ -277,8 +277,9 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
           savedProblemId = updateResult.rows[0].id;
       } else {
          console.log(`Creating new problem ${savedProblemId}`);
-         const insertQuery = `INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`;
-         const insertResult = await client.query(insertQuery, [savedProblemId, name, difficulty, content, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath]);
+const insertQuery = `INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`;
+const insertResult = await client.query(insertQuery, [savedProblemId, name, difficulty, content, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthContent, publicTestContent]);
+
          savedProblemId = insertResult.rows[0].id;
       }
       console.log(`Problem ${isUpdate ? 'updated' : 'created'} ID: ${savedProblemId}`);
@@ -649,4 +650,3 @@ router.get('/:id/datasets/:split', async (req, res) => {
 });
 
 module.exports = router;
-
