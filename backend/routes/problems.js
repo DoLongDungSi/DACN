@@ -1,4 +1,3 @@
-// backend/routes/problems.js
 const express = require('express');
 const pool = require('../config/db');
 const { authMiddleware, ownerOrCreatorMiddleware } = require('../middleware/auth');
@@ -9,29 +8,30 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-// Storage root for datasets (train/test/gt) per problem
+// Storage root for datasets
 ensureDir(DATA_ROOT);
+
+// Cấu hình AI Hint từ biến môi trường
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
-const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_SITE_URL = process.env.OPENROUTER_SITE_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-const OPENROUTER_APP_NAME = process.env.OPENROUTER_APP_NAME || 'ML Judge';
+const SYSTEM_PROMPT = process.env.HINT_SYSTEM_PROMPT || "You are a helpful AI assistant for data science competitions. Provide a concise hint without giving away the code.";
 
 const router = express.Router();
+
+// --- HELPER FUNCTIONS (Viết đầy đủ, không viết tắt) ---
 
 const parseDatasets = (datasets) => {
     if (!datasets) return [];
     if (Array.isArray(datasets)) return datasets;
-    try { return JSON.parse(datasets); }
-    catch (e) { return []; }
+    try {
+        return JSON.parse(datasets);
+    } catch (e) {
+        return [];
+    }
 };
 
 const loadDatasetFromDisk = (entry) => {
     if (!entry) return null;
     const content = readFileContent(entry.path, entry.filename);
-    if (!content) {
-        console.warn(`Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
-    }
     return content;
 };
 
@@ -48,152 +48,128 @@ const saveUploadedFile = (problemId, file, split) => {
     const finalName = `${split}-${unique}-${base}`;
     const fullPath = path.join(dir, finalName);
     fs.writeFileSync(fullPath, file.buffer);
-    return { filename: base, path: path.relative(DATA_ROOT, fullPath), sizeBytes: file.size || file.buffer?.length || null };
+    
+    return {
+        filename: base,
+        path: path.relative(DATA_ROOT, fullPath),
+        sizeBytes: file.size || file.buffer?.length || null
+    };
 };
 
 const deleteFileIfExists = (fileRef) => {
     const full = resolveFilePath(fileRef);
     if (!full) return;
     try {
-        if (fs.existsSync(full)) fs.unlinkSync(full);
+        if (fs.existsSync(full)) {
+            fs.unlinkSync(full);
+        }
     } catch (e) {
-        console.warn('Unable to delete old file', full, e.message || e);
+        console.error('Error deleting file:', full, e);
     }
 };
 
 const buildDatasetList = (problemRow) => {
     const rawDatasets = parseDatasets(problemRow.datasets);
     if (!Array.isArray(rawDatasets)) return [];
+    
     return rawDatasets
         .filter(entry => entry && entry.split)
         .map(entry => {
             const split = entry.split;
             let sizeBytes = entry.sizeBytes || null;
+            
             const resolvedPath = entry.path ? resolveFilePath(entry.path) : null;
             if (resolvedPath) {
                 try {
                     const stat = fs.statSync(resolvedPath);
                     sizeBytes = stat.size;
                 } catch (err) {
-                    console.warn(`Could not stat dataset file ${resolvedPath}:`, err.message || err);
+                    // File might be missing physically
                 }
             }
-            const sanitized = {
+
+            return {
                 split,
                 filename: entry.filename || `${split}.csv`,
                 path: entry.path,
                 sizeBytes,
                 download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
             };
-            console.log('Dataset entry for problem', problemRow.id, JSON.stringify(sanitized));
-            return sanitized;
         })
-        .filter(entry => entry.split !== 'ground_truth');
+        .filter(entry => entry.split !== 'ground_truth'); // Hide ground truth from public list
 };
 
-// Configure multer for dataset, ground truth, and public test uploads (CSV files, stored in memory)
+// --- MULTER CONFIGURATION ---
+
 const storage = multer.memoryStorage();
-// Increased file size limit slightly for potentially larger datasets/scripts
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit per file
+    limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
     fileFilter: (req, file, cb) => {
-        // *** ADDED DETAILED LOGGING INSIDE fileFilter ***
-        console.log(`[fileFilter] Processing file - Fieldname: ${file.fieldname}, Originalname: ${file.originalname}, Mimetype: ${file.mimetype}`);
-
         const allowedCsvFields = ['trainCsv', 'testCsv', 'groundTruthCsv'];
-
         if (allowedCsvFields.includes(file.fieldname)) {
-            const isCsvMime = file.mimetype === 'text/csv';
-            const isCsvExtension = file.originalname.toLowerCase().endsWith('.csv');
-
-            if (isCsvMime || isCsvExtension) {
-                 console.log(`[fileFilter] Accepting CSV file for field '${file.fieldname}'. Mime: ${isCsvMime}, Extension: ${isCsvExtension}`);
-                 cb(null, true); // Accept file
+            if (file.mimetype === 'text/csv' || file.originalname.toLowerCase().endsWith('.csv')) {
+                 cb(null, true);
             } else {
-                console.error(`[fileFilter] REJECTING file for field '${file.fieldname}'. Originalname: ${file.originalname}, Mimetype: ${file.mimetype}. Reason: Not a CSV.`);
-                cb(new Error(`Only .csv files are allowed for ${file.fieldname}!`)); // Reject file
+                cb(new Error(`Only .csv files are allowed for ${file.fieldname}!`));
             }
         } else {
-             // If the fieldname is not one of the CSV fields, accept it (e.g., if other file types were added later)
-             console.log(`[fileFilter] Accepting non-CSV field '${file.fieldname}'.`);
              cb(null, true);
         }
     }
 }).fields([
     { name: 'trainCsv', maxCount: 1 },
-    { name: 'testCsv', maxCount: 1 }, // Public test
-    { name: 'groundTruthCsv', maxCount: 1 } // Ground truth file for scoring
+    { name: 'testCsv', maxCount: 1 },
+    { name: 'groundTruthCsv', maxCount: 1 }
 ]);
 
+// --- MAIN LOGIC ---
 
-// --- Helper function for Create/Update Problem Logic ---
 const handleProblemSave = async (req, res, isUpdate = false) => {
-  // Log req.files and req.body immediately
-  console.log("--- Inside handleProblemSave ---");
-  console.log("req.body:", JSON.stringify(req.body));
-  console.log("req.files (keys):", req.files ? JSON.stringify(Object.keys(req.files)) : 'req.files is undefined/null');
-
   const { problemData } = req.body;
   const problemId = isUpdate ? req.params.id : null;
   const authorId = req.userId;
   const userRole = req.userRole;
 
-  if (req.files === undefined || req.files === null) {
-      console.error("Critical Error: req.files is missing after Multer middleware ran.");
-      return res.status(500).json({ message: 'Server error: Failed to process uploaded files.' });
+  if (!problemData) {
+      return res.status(400).json({ message: 'Missing problem data.' });
   }
-  if (!problemData) return res.status(400).json({ message: 'Missing problem data.' });
 
   let parsedData;
-  try { parsedData = JSON.parse(problemData); }
-  catch (e) { return res.status(400).json({ message: 'Invalid problem data format (must be JSON string).' }); }
-
-  const { name, difficulty, content, summary = '', coverImageUrl = null, problemType, tagIds = [], metricIds = [], existingDatasets = [], evaluationScriptContent } = parsedData;
-
-  // Basic Validations
-  if (!name || !difficulty || !content || !problemType || !evaluationScriptContent || !evaluationScriptContent.trim() || !Array.isArray(tagIds) || !Array.isArray(metricIds)) {
-      return res.status(400).json({ message: 'Missing required fields (name, difficulty, content, type, script) or invalid tags/metrics format.' });
+  try {
+      parsedData = JSON.parse(problemData);
+  } catch (e) {
+      return res.status(400).json({ message: 'Invalid problem data format.' });
   }
-  if (!['easy', 'medium', 'hard'].includes(difficulty)) { return res.status(400).json({ message: 'Invalid difficulty value.' }); }
-  if (!['classification', 'regression'].includes(problemType)) { return res.status(400).json({ message: 'Invalid problemType value.' }); }
 
+  // Destructure all fields including new dataDescription
+  const { 
+      name, 
+      difficulty, 
+      content, 
+      summary = '', 
+      dataDescription = '', // Trường mới
+      coverImageUrl = null, 
+      problemType, 
+      tagIds = [], 
+      metricIds = [], 
+      existingDatasets = [], 
+      evaluationScriptContent 
+  } = parsedData;
 
-  // --- Dataset, Ground Truth & Public Test Handling ---
-   const sanitizeDatasetEntry = (entry) => {
-       if (!entry || typeof entry !== 'object') return null;
-       if (!entry.split || !entry.filename) return null;
-       const normalized = {
-           split: entry.split,
-           filename: entry.filename,
-           path: entry.path,
-            sizeBytes: entry.sizeBytes || null,
-       };
-       return normalized;
-   };
+  if (!name || !difficulty || !content || !problemType || !evaluationScriptContent) {
+      return res.status(400).json({ message: 'Missing required fields.' });
+  }
 
-   // Seed datasets from DB (safer than trusting client) when updating
-   let existingDbDatasets = [];
-   let existingGroundTruthPath = null;
-   let existingPublicTestPath = null;
-
-   // --- File buffers (will be written to disk after we have problemId) ---
    let datasets = [];
    let groundTruthPath = null;
    let publicTestPath = null;
-   const files = req.files;
+   const files = req.files || {};
 
-   // Process Train CSV (buffer will be written after we know problemId)
-   const uploadedTrain = files && files.trainCsv && files.trainCsv[0] ? files.trainCsv[0] : null;
-   const uploadedTest = files && files.testCsv && files.testCsv[0] ? files.testCsv[0] : null;
-   const uploadedGT = files && files.groundTruthCsv && files.groundTruthCsv[0] ? files.groundTruthCsv[0] : null;
+   const uploadedTrain = files.trainCsv?.[0];
+   const uploadedTest = files.testCsv?.[0];
+   const uploadedGT = files.groundTruthCsv?.[0];
 
-
-   // --- Validation after processing files ---
-    // Validation of presence will happen after loading existing metadata
-
-
-   // --- Database Transaction ---
    let client;
    let savedProblemId = problemId;
 
@@ -202,100 +178,157 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
       await client.query('BEGIN');
 
       if (isUpdate) {
+          // Check ownership
           const existingRes = await client.query('SELECT author_id, datasets, ground_truth_path, public_test_path FROM problems WHERE id = $1', [problemId]);
-          if (existingRes.rows.length === 0) { await client.query('ROLLBACK'); throw new Error('Problem not found.'); }
-          if (userRole !== 'owner' && existingRes.rows[0].author_id !== authorId) { await client.query('ROLLBACK'); throw new Error('Not authorized to update this problem.'); }
-          existingDbDatasets = parseDatasets(existingRes.rows[0].datasets) || [];
-          datasets = existingDbDatasets.map(sanitizeDatasetEntry).filter(Boolean);
-          groundTruthPath = existingRes.rows[0].ground_truth_path || null;
-          publicTestPath = existingRes.rows[0].public_test_path || null;
+          
+          if (existingRes.rows.length === 0) {
+              await client.query('ROLLBACK');
+              throw new Error('Problem not found.');
+          }
+          
+          if (userRole !== 'owner' && existingRes.rows[0].author_id !== authorId) {
+              await client.query('ROLLBACK');
+              throw new Error('Not authorized.');
+          }
+          
+          const row = existingRes.rows[0];
+          // Preserve existing paths if not replaced
+          datasets = parseDatasets(row.datasets); 
+          groundTruthPath = row.ground_truth_path;
+          publicTestPath = row.public_test_path;
       } else {
-          // Pre-reserve an ID so we can place files on disk with stable folder names
+          // New problem ID
           const idRes = await client.query("SELECT nextval('problems_id_seq') as id");
           savedProblemId = idRes.rows[0].id;
           datasets = [];
       }
 
-      // Helpers for dataset replacement
-      const replaceDatasetEntry = (split, savedInfo) => {
-          if (!savedInfo) return;
-          const existing = datasets.find(d => d.split === split);
-          if (existing?.path) deleteFileIfExists(existing.path);
-          datasets = datasets.filter(d => d && d.split !== split);
-          datasets.push({ split, filename: savedInfo.filename, path: savedInfo.path, sizeBytes: savedInfo.sizeBytes || null });
-      };
+      // Helper to update dataset array
+      const updateDatasetMeta = (split, fileObj) => {
+           datasets = datasets.filter(d => d.split !== split);
+           datasets.push({ 
+               split, 
+               filename: fileObj.filename, 
+               path: fileObj.path, 
+               sizeBytes: fileObj.sizeBytes 
+           });
+      }
 
-      // Write uploaded files to disk now that we know problemId
+      // Process Uploads
       if (uploadedTrain) {
           const saved = saveUploadedFile(savedProblemId, uploadedTrain, 'train');
-          replaceDatasetEntry('train', saved);
-          console.log(`Saved train dataset to ${saved.path}`);
+          updateDatasetMeta('train', saved);
       }
       if (uploadedTest) {
           const saved = saveUploadedFile(savedProblemId, uploadedTest, 'public_test');
-          replaceDatasetEntry('public_test', saved);
+          updateDatasetMeta('public_test', saved);
           publicTestPath = saved.path;
-          console.log(`Saved public test dataset to ${saved.path}`);
       }
       if (uploadedGT) {
-          if (groundTruthPath) deleteFileIfExists(groundTruthPath);
           const saved = saveUploadedFile(savedProblemId, uploadedGT, 'ground_truth');
           groundTruthPath = saved.path;
-          // We still keep metadata entry for GT just to track filename/path internally (not exposed)
-          replaceDatasetEntry('ground_truth', saved);
-          console.log(`Saved ground truth dataset to ${saved.path}`);
+          updateDatasetMeta('ground_truth', saved);
       }
 
-      // Validate presence of required datasets
-      const hasTrainMeta = datasets.some(d => d.split === 'train' && d.path);
-      const hasPublicTestMeta = datasets.some(d => d.split === 'public_test' && d.path);
-      if (!hasTrainMeta) { throw new Error('Missing required dataset file: train.'); }
-      if (!hasPublicTestMeta) { throw new Error('Missing required dataset file: public test.'); }
-      if (!groundTruthPath) { throw new Error('Ground truth file missing.'); }
+      // Validation
+      const hasTrain = datasets.some(d => d.split === 'train');
+      const hasTest = datasets.some(d => d.split === 'public_test');
+      
+      // Strict check: must have these files
+      if (!hasTrain || !hasTest || !groundTruthPath) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ message: 'Missing required dataset files (Train, Public Test, or Ground Truth).' });
+      }
 
-      // Insert/Update Problem
       const datasetsJson = JSON.stringify(datasets);
+      
+      // SQL Insert/Update
       if (isUpdate) {
-         console.log(`Updating problem ${problemId}`);
-         const updateQuery = `UPDATE problems SET name=$1, difficulty=$2, content=$3, summary=$4, cover_image_url=$5, problem_type=$6, datasets=$7, evaluation_script=$8, ground_truth_path=$9, public_test_path=$10 WHERE id = $11 RETURNING id`;
-         const updateResult = await client.query(updateQuery, [name, difficulty, content, summary, coverImageUrl, problemType, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath, problemId]);
-          if (updateResult.rowCount === 0) { await client.query('ROLLBACK'); throw new Error('Update failed. Problem not found or no changes.'); }
-          savedProblemId = updateResult.rows[0].id;
+         const updateQuery = `
+            UPDATE problems 
+            SET name=$1, difficulty=$2, content=$3, summary=$4, cover_image_url=$5, 
+                problem_type=$6, datasets=$7, evaluation_script=$8, ground_truth_path=$9, 
+                public_test_path=$10, data_description=$11 
+            WHERE id = $12 RETURNING id`;
+         
+         await client.query(updateQuery, [
+             name, difficulty, content, summary, coverImageUrl, 
+             problemType, datasetsJson, evaluationScriptContent, 
+             groundTruthPath, publicTestPath, dataDescription, problemId
+         ]);
       } else {
-         console.log(`Creating new problem ${savedProblemId}`);
-const insertQuery = `INSERT INTO problems (id, name, difficulty, content, summary, cover_image_url, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`;
-const insertResult = await client.query(insertQuery, [savedProblemId, name, difficulty, content, summary, coverImageUrl, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath]);
-
-         savedProblemId = insertResult.rows[0].id;
+         const insertQuery = `
+            INSERT INTO problems (id, name, difficulty, content, summary, cover_image_url, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path, data_description) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`;
+         
+         await client.query(insertQuery, [
+             savedProblemId, name, difficulty, content, summary, coverImageUrl, 
+             problemType, authorId, datasetsJson, evaluationScriptContent, 
+             groundTruthPath, publicTestPath, dataDescription
+         ]);
       }
-      console.log(`Problem ${isUpdate ? 'updated' : 'created'} ID: ${savedProblemId}`);
 
       // Tags & Metrics
       await client.query('DELETE FROM problem_tags WHERE problem_id = $1', [savedProblemId]);
       await client.query('DELETE FROM problem_metrics WHERE problem_id = $1', [savedProblemId]);
-      const validTagIds = tagIds.filter(id => typeof id === 'number' && !isNaN(id));
-      const validMetricIds = metricIds.filter(id => typeof id === 'number' && !isNaN(id));
-      const tagPromises = validTagIds.map(tagId => client.query('INSERT INTO problem_tags (problem_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [savedProblemId, tagId]));
-      const metricPromises = validMetricIds.map((metricId, index) => client.query('INSERT INTO problem_metrics (problem_id, metric_id, is_primary) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [savedProblemId, metricId, index === 0]));
-      await Promise.all([...tagPromises, ...metricPromises]);
-      console.log(`Tags/Metrics updated for problem ID: ${savedProblemId}`);
+      
+      if (tagIds.length) {
+          const tagValues = tagIds.map((tid, i) => `($1, $${i + 2})`).join(',');
+          await client.query(`INSERT INTO problem_tags (problem_id, tag_id) VALUES ${tagValues} ON CONFLICT DO NOTHING`, [savedProblemId, ...tagIds]);
+      }
+      if (metricIds.length) {
+          const metricQueries = metricIds.map((mid, i) => 
+              client.query('INSERT INTO problem_metrics (problem_id, metric_id, is_primary) VALUES ($1, $2, $3)', [savedProblemId, mid, i === 0])
+          );
+          await Promise.all(metricQueries);
+      }
 
-      // Commit Transaction
       await client.query('COMMIT');
-      console.log(`Transaction committed for problem ID: ${savedProblemId}`);
 
-      // Fetch final data for response
-       const finalProblemRes = await pool.query(
-           `SELECT p.id, p.name, p.difficulty, p.content, p.summary, p.problem_type, p.author_id, p.created_at,
-                   p.evaluation_script,
-                   u.username as author_username, p.datasets, p.cover_image_url,
-                   (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-                   (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
-                   (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
-                   COALESCE(tags.tag_ids, '{}'::int[]) as tags,
-                   COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
-                   COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
-                   COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
+      // Return full problem data
+      const finalRes = await pool.query(`SELECT * FROM problems WHERE id = $1`, [savedProblemId]);
+      const finalProblem = finalRes.rows[0];
+      finalProblem.datasets = buildDatasetList(finalProblem);
+      
+      res.status(isUpdate ? 200 : 201).json({ problem: toCamelCase(finalProblem) });
+
+   } catch (error) {
+     if (client) { 
+         try { await client.query('ROLLBACK'); } catch (e) {} 
+     }
+     console.error('Save problem error:', error);
+     res.status(500).json({ message: error.message });
+   } finally {
+     if (client) client.release();
+   }
+};
+
+// --- ROUTES ---
+
+router.post('/', authMiddleware, ownerOrCreatorMiddleware, upload, (req, res) => handleProblemSave(req, res, false));
+router.put('/:id', authMiddleware, ownerOrCreatorMiddleware, upload, (req, res) => handleProblemSave(req, res, true));
+
+router.get('/:id', async (req, res) => {
+    const { id } = req.params;
+    const problemId = Number(id);
+    if (isNaN(problemId)) { 
+        return res.status(400).json({ message: 'Invalid ID.' }); 
+    }
+
+    try {
+       const result = await pool.query(
+           `SELECT
+               p.id, p.name, p.difficulty, p.content, p.summary, p.data_description, p.problem_type, p.author_id, p.created_at,
+               p.evaluation_script,
+               u.username as author_username,
+               p.datasets, p.cover_image_url,
+               (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
+               (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
+               (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
+               COALESCE(tags.tag_ids, '{}'::int[]) as tags,
+               COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
+               COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
+               COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
             FROM problems p
             LEFT JOIN users u ON p.author_id = u.id
             LEFT JOIN (SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids FROM problem_tags WHERE problem_id = $1 GROUP BY problem_id) tags ON p.id = tags.problem_id
@@ -303,145 +336,25 @@ const insertResult = await client.query(insertQuery, [savedProblemId, name, diff
             LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('id', m.id, 'key', m.key, 'direction', m.direction, 'isPrimary', pm.is_primary) ORDER BY m.key) as details FROM problem_metrics pm JOIN metrics m ON pm.metric_id = m.id WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_details ON p.id = metrics_details.problem_id
             LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary) ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id) as links FROM problem_metrics pm WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_links ON p.id = metrics_links.problem_id
             WHERE p.id = $1`,
-           [savedProblemId]
+           [problemId]
        );
 
-        if (finalProblemRes.rows.length === 0) {
-            console.error(`Consistency Error: Could not retrieve problem data (ID: ${savedProblemId}) immediately after saving.`);
-            throw new Error('Could not retrieve problem data after saving.');
-        }
-        console.log(`Successfully saved/fetched problem ${savedProblemId} for response.`);
-        const responseProblem = finalProblemRes.rows[0];
-        responseProblem.metrics_details = responseProblem.metrics_details || []; // Ensure it's an array
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: 'Problem not found.' });
+      }
 
-      // Send successful response
-      res.status(isUpdate ? 200 : 201).json({ problem: toCamelCase(responseProblem) });
+      const problemData = result.rows[0];
+      problemData.metrics_details = problemData.metrics_details || [];
+      problemData.datasets = buildDatasetList(problemData);
 
-   } catch (error) {
-     if (client) { try { await client.query('ROLLBACK'); console.log("Transaction rolled back."); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
-     console.error(`Error saving problem (isUpdate: ${isUpdate}):`, error);
-     res.status(500).json({ message: `Failed to save problem. Error: ${(error instanceof Error ? error.message : String(error))}` });
-   } finally {
-     if (client) client.release();
-   }
-};
+      res.json({ problem: toCamelCase(problemData) });
 
-// --- Create Problem Route ---
-router.post(
-  '/',
-  authMiddleware,
-  ownerOrCreatorMiddleware,
-  (req, res, next) => {
-      console.log("POST /problems - Running Multer middleware...");
-      upload(req, res, (err) => {
-          if (err instanceof multer.MulterError) {
-              console.error("Multer error on POST:", err);
-              return res.status(400).json({ message: `File upload error: ${err.code} - ${err.message}` });
-          } else if (err) {
-              console.error("Unknown file upload error on POST:", err);
-              // Check if it's the specific fileFilter error
-              if (err.message && err.message.startsWith('Only .csv files are allowed')) {
-                  return res.status(400).json({ message: err.message });
-              }
-              return res.status(500).json({ message: `File processing error: ${err.message}` }); // More generic for other errors
-          }
-           console.log("POST /problems - Multer finished successfully.");
-           console.log("Files received by Multer (POST):", req.files ? JSON.stringify(Object.keys(req.files)) : 'None');
-           next();
-      });
-  },
-  (req, res) => handleProblemSave(req, res, false)
-);
-
-// --- Update Problem Route ---
-router.put(
-  '/:id',
-  authMiddleware,
-  ownerOrCreatorMiddleware,
-   (req, res, next) => {
-       console.log(`PUT /problems/${req.params.id} - Running Multer middleware...`);
-      upload(req, res, (err) => {
-           if (err instanceof multer.MulterError) {
-              console.error(`Multer error on PUT /problems/${req.params.id}:`, err);
-              return res.status(400).json({ message: `File upload error: ${err.code} - ${err.message}` });
-          } else if (err) {
-              console.error(`Unknown file upload error on PUT /problems/${req.params.id}:`, err);
-               if (err.message && err.message.startsWith('Only .csv files are allowed')) {
-                  return res.status(400).json({ message: err.message });
-              }
-              return res.status(500).json({ message: `File processing error: ${err.message}` });
-          }
-           console.log(`PUT /problems/${req.params.id} - Multer finished successfully.`);
-           console.log("Files received by Multer (PUT):", req.files ? JSON.stringify(Object.keys(req.files)) : 'None');
-           next();
-      });
-  },
-  (req, res) => handleProblemSave(req, res, true)
-);
-
-// --- Delete Problem Route ---
-router.delete('/:id', authMiddleware, ownerOrCreatorMiddleware, async (req, res) => {
-  const { id } = req.params;
-  const problemId = Number(id);
-  const userId = req.userId;
-  const userRole = req.userRole;
-
-  if (isNaN(problemId)) {
-    return res.status(400).json({ message: 'Invalid ID.' });
-  }
-
-  const client = await pool.connect();
-  try {
-     await client.query('BEGIN');
-
-     // Check ownership or if user is owner
-     if (userRole !== 'owner') {
-         const ownerCheck = await client.query('SELECT author_id FROM problems WHERE id = $1', [problemId]);
-         if (ownerCheck.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Problem not found.' });
-         }
-         if (ownerCheck.rows[0].author_id !== userId) {
-            await client.query('ROLLBACK');
-            return res.status(403).json({ message: 'Not authorized to delete this problem.' });
-         }
-     }
-
-      // Explicitly delete related data before deleting the problem
-      console.log(`Deleting relationships for problem ${problemId}...`);
-      await client.query(`DELETE FROM votes WHERE comment_id IN (SELECT id FROM discussion_comments WHERE post_id IN (SELECT id FROM discussion_posts WHERE problem_id = $1))`, [problemId]);
-      await client.query(`DELETE FROM votes WHERE post_id IN (SELECT id FROM discussion_posts WHERE problem_id = $1)`, [problemId]);
-      await client.query(`DELETE FROM discussion_comments WHERE post_id IN (SELECT id FROM discussion_posts WHERE problem_id = $1)`, [problemId]);
-      await client.query('DELETE FROM discussion_posts WHERE problem_id = $1', [problemId]);
-      await client.query('DELETE FROM submissions WHERE problem_id = $1', [problemId]);
-      await client.query('DELETE FROM problem_tags WHERE problem_id = $1', [problemId]);
-      await client.query('DELETE FROM problem_metrics WHERE problem_id = $1', [problemId]);
-
-     // Perform the final problem deletion
-     console.log(`Deleting problem ${problemId} itself...`);
-     const deleteResult = await client.query('DELETE FROM problems WHERE id = $1 RETURNING id', [problemId]);
-
-     if (deleteResult.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ message: 'Problem not found during final delete step.' });
-     }
-
-     await client.query('COMMIT');
-     console.log(`Successfully deleted problem ${problemId}.`);
-     res.status(204).send();
-
-  } catch (error) {
-    try { await client.query('ROLLBACK'); console.log("Transaction rolled back due to deletion error."); }
-    catch (rollbackError) { console.error("Error rolling back transaction during delete:", rollbackError); }
-     console.error(`Error deleting problem ${problemId}:`, error);
-     const msg = (error instanceof Error ? error.message : String(error));
-     res.status(500).json({ message: `Server error while deleting problem. ${msg}` });
-  } finally {
-    client.release();
-  }
+    } catch (error) {
+      console.error(`Error fetching problem ${problemId}:`, error);
+      res.status(500).json({ message: 'Lỗi server khi lấy chi tiết bài toán.' });
+    }
 });
 
-// --- Get All Problems Route ---
 router.get('/', async (req, res) => {
     try {
       const result = await pool.query(
@@ -467,171 +380,98 @@ router.get('/', async (req, res) => {
     }
 });
 
-// --- Get Single Problem Route ---
-router.get('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware, ownerOrCreatorMiddleware, async (req, res) => {
     const { id } = req.params;
     const problemId = Number(id);
-    if (isNaN(problemId)) { return res.status(400).json({ message: 'Invalid ID.' }); }
-
+    
+    const client = await pool.connect();
     try {
-       const result = await pool.query(
-           `SELECT
-               p.id, p.name, p.difficulty, p.content, p.summary, p.problem_type, p.author_id, p.created_at,
-               p.evaluation_script,
-               u.username as author_username,
-               p.datasets, p.cover_image_url,
-               (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-               (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
-               (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
-               COALESCE(tags.tag_ids, '{}'::int[]) as tags,
-               COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
-               COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
-               COALESCE(metrics_links.links, '[]'::jsonb) as metrics_links
-            FROM problems p
-            LEFT JOIN users u ON p.author_id = u.id
-            LEFT JOIN (SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids FROM problem_tags WHERE problem_id = $1 GROUP BY problem_id) tags ON p.id = tags.problem_id
-            LEFT JOIN (SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids FROM problem_metrics WHERE problem_id = $1 GROUP BY problem_id) metrics_agg ON p.id = metrics_agg.problem_id
-            LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('id', m.id, 'key', m.key, 'direction', m.direction, 'isPrimary', pm.is_primary) ORDER BY m.key) as details FROM problem_metrics pm JOIN metrics m ON pm.metric_id = m.id WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_details ON p.id = metrics_details.problem_id
-            LEFT JOIN (SELECT pm.problem_id, jsonb_agg(jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary) ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id) as links FROM problem_metrics pm WHERE pm.problem_id = $1 GROUP BY pm.problem_id) metrics_links ON p.id = metrics_links.problem_id
-            WHERE p.id = $1`,
-           [problemId]
-       );
-
-      if (result.rows.length === 0) {
-        return res.status(404).json({ message: 'Problem not found.' });
-      }
-      const problemData = result.rows[0];
-      problemData.metrics_details = problemData.metrics_details || [];
-      problemData.datasets = buildDatasetList(problemData);
-
-      res.json({ problem: toCamelCase(problemData) });
-    } catch (error) {
-      console.error(`Error fetching problem ${problemId}:`, error);
-      res.status(500).json({ message: 'Lỗi server khi lấy chi tiết bài toán.' });
+        await client.query('BEGIN');
+        await client.query('DELETE FROM problems WHERE id = $1', [problemId]);
+        await client.query('COMMIT');
+        res.status(204).send();
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('Delete problem error:', e);
+        res.status(500).json({message: 'Delete failed'});
+    } finally { 
+        client.release(); 
     }
 });
 
-// --- Generate AI Hint ---
-router.post('/:id/hint', async (req, res) => {
-    const { id } = req.params;
-    const problemId = Number(id);
-    if (isNaN(problemId)) {
-        return res.status(400).json({ message: 'Invalid ID.' });
-    }
-
-    // Even when no API key is configured, return a graceful fallback instead of erroring
-    const noKeyFallback = () => res.status(200).json({
-        hint: 'Hãy bắt đầu bằng một baseline đơn giản, kiểm tra kỹ format dữ liệu và thử nhiều đặc trưng/thuật toán nhanh trước khi tối ưu.',
-        warning: 'AI hint service is not configured – đang dùng gợi ý mặc định.',
-    });
-
+router.get('/:id/datasets/:split', async (req, res) => {
+    const { id, split } = req.params;
+    
     try {
-        const problemRes = await pool.query('SELECT name, content FROM problems WHERE id = $1', [problemId]);
-        if (problemRes.rows.length === 0) {
+        const result = await pool.query('SELECT datasets FROM problems WHERE id = $1', [id]);
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Problem not found.' });
         }
-        const problem = problemRes.rows[0];
-
-        if (!OPENROUTER_API_KEY) {
-            return noKeyFallback();
+        
+        const datasets = parseDatasets(result.rows[0].datasets);
+        const dataset = datasets.find(d => d.split === split);
+        
+        if (!dataset) {
+            return res.status(404).json({ message: 'Dataset not found.' });
         }
 
-        const summary = (problem.content || '').replace(/<[^>]*>/g, '').slice(0, 600);
-        const prompt = `Provide a concise (max 3 sentences) strategic hint for this machine learning challenge:
-Title: ${problem.name}
-Summary: ${summary}
-Focus on approach guidance, not code, and keep the tone encouraging.`;
+        const fullPath = resolveFilePath(dataset.path);
+        if (!fullPath || !fs.existsSync(fullPath)) {
+            return res.status(404).json({ message: 'File not found on server.' });
+        }
 
+        res.download(fullPath, dataset.filename);
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ message: 'Error downloading file' });
+    }
+});
+
+// --- NEW ROUTE: Hint with Premium Check & Prompt Config ---
+router.post('/:id/hint', authMiddleware, async (req, res) => {
+    const { id } = req.params;
+    try {
+        // 1. Kiểm tra User có Premium không
+        const userRes = await pool.query('SELECT is_premium FROM users WHERE id = $1', [req.userId]);
+        
+        if (!userRes.rows.length || !userRes.rows[0].is_premium) {
+            return res.status(403).json({ 
+                message: 'Tính năng này chỉ dành cho tài khoản Premium.',
+                requiresPremium: true 
+            });
+        }
+
+        const result = await pool.query('SELECT content, summary FROM problems WHERE id = $1', [id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Bài toán không tồn tại.' });
+        }
+        const problemContent = result.rows[0].content;
+
+        // Gọi API AI để lấy gợi ý
         const response = await axios.post(
-            OPENROUTER_BASE_URL,
+            'https://openrouter.ai/api/v1/chat/completions',
             {
-                model: OPENROUTER_MODEL,
+                model: 'google/gemini-2.0-flash-exp:free', // Hoặc model bạn muốn
                 messages: [
-                    { role: 'system', content: 'You are an assistant helping competitors on a machine-learning contest platform with short strategic hints.' },
-                    { role: 'user', content: prompt },
-                ],
-                max_tokens: 200,
-                temperature: 0.3,
+                    { role: 'system', content: SYSTEM_PROMPT },
+                    { role: 'user', content: `Problem Description:\n${problemContent}\n\nGive me a hint to solve this data science problem.` }
+                ]
             },
             {
-                timeout: 20000,
                 headers: {
-                    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': OPENROUTER_SITE_URL,
-                    'X-Title': OPENROUTER_APP_NAME,
-                },
+                    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+                    'HTTP-Referer': process.env.FRONTEND_URL || 'http://localhost:3000',
+                    'X-Title': 'ML Judge'
+                }
             }
         );
 
-        const hintText = response.data?.choices?.[0]?.message?.content;
-        const hintText2 = response.data?.choices?.[1]?.message?.content;
-        const finalHint = hintText || hintText2;
-        if (!finalHint) {
-            return res.status(502).json({ message: 'AI service did not return a hint.' });
-        }
-        res.json({ hint: finalHint.trim() });
+        const hint = response.data.choices[0]?.message?.content || "Không thể tạo gợi ý lúc này.";
+        res.json({ hint });
+
     } catch (error) {
-        const apiError = error.response?.data?.error || error.response?.data || error.message;
-        console.error('Error generating hint:', apiError);
-
-        // Fall back to a local/static hint so UI still works even if OpenRouter key fails
-        const fallbackHint = 'Hãy bắt đầu bằng một baseline đơn giản, kiểm tra kỹ format dữ liệu và thử so sánh nhiều mô hình/feature nhanh trước khi tối ưu.';
-
-        const message = (typeof apiError === 'string')
-            ? apiError
-            : (apiError?.message || 'Không tạo được gợi ý cho bài toán này.');
-
-        // Return both the warning message and a usable fallback hint
-        return res.status(200).json({
-            hint: fallbackHint,
-            warning: message,
-        });
-    }
-});
-
-// --- Download Dataset ---
-router.get('/:id/datasets/:split', async (req, res) => {
-    const problemId = Number(req.params.id);
-    const split = req.params.split;
-    if (isNaN(problemId)) {
-        return res.status(400).json({ message: 'Invalid ID.' });
-    }
-
-    if (split === 'ground_truth') {
-        return res.status(403).json({ message: 'Không thể tải ground truth.' });
-    }
-
-    try {
-        const problemRes = await pool.query(
-            'SELECT datasets, public_test_path FROM problems WHERE id = $1',
-            [problemId]
-        );
-        if (problemRes.rows.length === 0) {
-            return res.status(404).json({ message: 'Problem not found.' });
-        }
-
-        const problem = problemRes.rows[0];
-        const datasets = parseDatasets(problem.datasets);
-        const entry = datasets.find(d => d && d.split === split);
-        let content = null;
-        let filename = entry?.filename || `${split}.csv`;
-
-        content = loadDatasetFromDisk(entry || { filename });
-        if (!content && split === 'public_test' && problem.public_test_path) {
-            content = loadDatasetFromDisk({ path: problem.public_test_path, filename });
-        }
-
-        if (!content) {
-            return res.status(404).json({ message: 'Dataset chưa sẵn sàng để tải.' });
-        }
-
-        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        return res.send(content);
-    } catch (error) {
-        console.error('Error downloading dataset:', error);
-        return res.status(500).json({ message: 'Không thể tải dataset.' });
+        console.error('Hint error:', error.response?.data || error.message);
+        res.status(500).json({ message: 'Lỗi khi tạo gợi ý AI.' });
     }
 });
 

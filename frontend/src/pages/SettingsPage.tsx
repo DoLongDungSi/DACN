@@ -1,7 +1,8 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { UserCog, KeyRound, Lock, Bell, Camera, Globe, Github, Linkedin, Twitter, Crown, CreditCard, Receipt, Download } from 'lucide-react';
+import { Navigate } from 'react-router-dom';
+import { UserCog, KeyRound, Lock, Bell, Camera, Globe, Github, Linkedin, Twitter, Crown, CreditCard, Receipt, Download, Key } from 'lucide-react';
 import { useAppContext } from '../hooks/useAppContext';
-import type { User, UserProfile, NotificationPreferences, Education, WorkExperience } from '../types'; // Import Education, WorkExperience
+import type { UserProfile, NotificationPreferences, Education, WorkExperience } from '../types';
 import { UserAvatar } from '../components/Common/UserAvatar';
 import { ChangePasswordModal } from '../components/Settings/ChangePasswordModal';
 import { AvatarCropModal } from '../components/Settings/AvatarCropModal';
@@ -23,18 +24,19 @@ export const SettingsPage: React.FC = () => {
     const [username, setUsername] = useState(currentUser?.username ?? "");
     const [email, setEmail] = useState(currentUser?.email ?? "");
     const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+    const [redeemKey, setRedeemKey] = useState(""); // State cho nhập key
     const avatarFileRef = useRef<HTMLInputElement>(null);
 
-    // Add state for editing education and work experience (simplified example)
     const [editingEducation, setEditingEducation] = useState<Education[]>(profile.education || []);
     const [editingWork, setEditingWork] = useState<WorkExperience[]>(profile.workExperience || []);
 
+    // --- SECURITY CHECK ---
     if (!currentUser) {
-        return <div className="p-8 text-center text-slate-500">Đang tải thông tin người dùng...</div>;
+        return <Navigate to="/auth" replace />;
     }
 
-     // --- Avatar Upload Logic ---
-     const onSelectFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    // --- Avatar Upload Logic ---
+    const onSelectFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
             const file = e.target.files[0];
             if (!file.type.startsWith('image/')) { showToast("Vui lòng chọn file ảnh.", "error"); return; }
@@ -47,7 +49,6 @@ export const SettingsPage: React.FC = () => {
         }
     }, [setOriginalFileName, setImgSrc, setIsAvatarModalOpen, showToast]);
 
-
     // --- Save Handler ---
     const handleSave = useCallback(async () => {
         if (!currentUser || !username.trim() || !email.trim() || !/\S+@\S+\.\S+/.test(email.trim())) {
@@ -55,21 +56,36 @@ export const SettingsPage: React.FC = () => {
         }
         setLoading(true);
         try {
-             // Include updated education and work experience in the profile
              const updatedProfile = { ...profile, education: editingEducation, workExperience: editingWork };
              const data = await api.put('/users/me', { username: username.trim(), email: email.trim(), profile: updatedProfile });
             setCurrentUser(prev => prev ? { ...prev, ...data.user } : data.user);
             setUsers(users.map(u => u.id === data.user.id ? data.user : u));
-            setProfile(updatedProfile); // Update local profile state as well
+            setProfile(updatedProfile);
             showToast("Cập nhật thành công!", "success");
         } catch (err: any) { showToast(err.message || "Lỗi cập nhật.", "error"); }
         finally { setLoading(false); }
-    }, [currentUser, username, email, profile, editingEducation, editingWork, api, setCurrentUser, setUsers, setLoading, showToast]); // Added editingEducation, editingWork
+    }, [currentUser, username, email, profile, editingEducation, editingWork, api, setCurrentUser, setUsers, setLoading, showToast]);
 
-    // --- Change Password Handler ---
+    // --- Billing Handlers ---
+    const handleRedeemKey = async () => {
+        if (!redeemKey.trim()) return showToast("Vui lòng nhập mã.", "error");
+        setLoading(true);
+        try {
+            await api.post('/billing/redeem', { key: redeemKey.trim() });
+            showToast("Kích hoạt Premium thành công!", "success");
+            setRedeemKey("");
+            refreshBilling();
+        } catch (err: any) {
+            showToast(err.message || "Mã không hợp lệ.", "error");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // --- Other Handlers (Password, Delete) omitted for brevity but kept same logic ---
     const handleChangePassword = useCallback(async (currentPass: string, newPass: string): Promise<boolean> => {
         if (!currentPass || !newPass || newPass.length < 6) {
-            showToast(!currentPass || !newPass ? "Nhập đủ mật khẩu." : "Mật khẩu mới quá yếu.", "error"); return false;
+            showToast("Mật khẩu không hợp lệ.", "error"); return false;
         }
         setLoading(true);
         try {
@@ -78,7 +94,6 @@ export const SettingsPage: React.FC = () => {
         } catch (err: any) { showToast(err.message || "Đổi mật khẩu thất bại.", "error"); setLoading(false); return false; }
     }, [api, setLoading, showToast]);
 
-    // --- Delete Account Handler ---
     const handleDeleteAccount = useCallback(() => {
          if (!currentUser || currentUser.id === OWNER_ID) return;
          openConfirmModal( "Xác nhận xóa tài khoản", "CẢNH BÁO!...", async () => {
@@ -88,24 +103,18 @@ export const SettingsPage: React.FC = () => {
          });
     }, [currentUser, api, handleLogout, openConfirmModal, closeConfirmModal, setLoading, showToast]);
 
-
-    // --- Notification Change Handler ---
-     const handleNotifChange = useCallback((key: keyof NotificationPreferences, type: "email" | "site", value: boolean) => {
+    const handleNotifChange = useCallback((key: keyof NotificationPreferences, type: "email" | "site", value: boolean) => {
         setProfile(p => ({ ...p, notifications: { ...(p.notifications || {}), [key]: { ...(p.notifications?.[key] || { email: false, site: false }), [type]: value } } }));
     }, []);
 
-     // --- Handlers for Education/Work Experience --- (Simplified: Add/Remove only)
-     const addEducation = () => setEditingEducation(prev => [...prev, { id: Date.now(), school: '', degree: '', duration: '' }]);
-     const removeEducation = (id: number) => setEditingEducation(prev => prev.filter(edu => edu.id !== id));
-     const updateEducation = (id: number, field: keyof Education, value: string) => {
-         setEditingEducation(prev => prev.map(edu => edu.id === id ? { ...edu, [field]: value } : edu));
-     };
-     // Similar functions for Work Experience: addWork, removeWork, updateWork
-     const addWork = () => setEditingWork(prev => [...prev, { id: Date.now(), title: '', company: '', duration: '' }]);
-     const removeWork = (id: number) => setEditingWork(prev => prev.filter(w => w.id !== id));
-      const updateWork = (id: number, field: keyof WorkExperience, value: string) => {
-         setEditingWork(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
-     };
+    // Education/Work Utils
+    const addEducation = () => setEditingEducation(prev => [...prev, { id: Date.now(), school: '', degree: '', duration: '' }]);
+    const removeEducation = (id: number) => setEditingEducation(prev => prev.filter(edu => edu.id !== id));
+    const updateEducation = (id: number, field: keyof Education, value: string) => setEditingEducation(prev => prev.map(edu => edu.id === id ? { ...edu, [field]: value } : edu));
+    
+    const addWork = () => setEditingWork(prev => [...prev, { id: Date.now(), title: '', company: '', duration: '' }]);
+    const removeWork = (id: number) => setEditingWork(prev => prev.filter(w => w.id !== id));
+    const updateWork = (id: number, field: keyof WorkExperience, value: string) => setEditingWork(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
 
 
     const tabs = [
@@ -119,130 +128,162 @@ export const SettingsPage: React.FC = () => {
     const notificationRows = [
         { key: "announcements", label: "Thông báo chung" }, { key: "featureAnnouncements", label: "Tính năng mới" },
         { key: "award", label: "Giải thưởng/Thành tích" }, { key: "contestUpdates", label: "Cập nhật cuộc thi" },
-        { key: "newComments", label: "Bình luận mới (Thảo luận)" }, { key: "promotions", label: "Khuyến mãi/Ưu đãi" },
+        { key: "newComments", label: "Bình luận mới" }, { key: "promotions", label: "Khuyến mãi/Ưu đãi" },
     ] as const;
 
-    // ----- RENDER -----
+    // --- Common Styles (Replaces the <style> tag) ---
+    const inputClass = "w-full px-3 py-2.5 bg-white border border-slate-300 rounded-lg text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none transition-all";
+    const labelClass = "block text-sm font-semibold text-slate-700 mb-1.5";
+    const sectionTitle = "text-xl font-bold text-slate-800 mb-5";
+
     return (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-            {/* Render Modals */}
-             <AvatarCropModal
-                isOpen={isAvatarModalOpen}
-                onClose={() => { setIsAvatarModalOpen(false); setImgSrc(''); }}
-                imgSrc={imgSrc}
-                originalFileName={originalFileName}
-            />
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 pb-12">
+             <AvatarCropModal isOpen={isAvatarModalOpen} onClose={() => { setIsAvatarModalOpen(false); setImgSrc(''); }} imgSrc={imgSrc} originalFileName={originalFileName} />
             <ChangePasswordModal isOpen={changePasswordModalOpen} onClose={() => setChangePasswordModalOpen(false)} onChangePassword={handleChangePassword} isChanging={loading}/>
 
-            {/* Left Sidebar */}
-            <div className="md:col-span-1">
-                <div className="flex flex-col items-center md:items-start p-4 rounded-lg mb-6">
-                    <div className="relative group cursor-pointer mb-2" onClick={() => avatarFileRef.current?.click()} title="Đổi ảnh đại diện">
-                        <UserAvatar user={currentUser} size="w-24 h-24" textClass="text-4xl" />
+            {/* Sidebar */}
+            <div className="lg:col-span-1 space-y-6">
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center text-center">
+                    <div className="relative group cursor-pointer mb-4" onClick={() => avatarFileRef.current?.click()}>
+                        <UserAvatar user={currentUser} size="w-28 h-28" textClass="text-5xl" />
                         <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="w-8 h-8 text-white" /></div>
                     </div>
                     <input type="file" ref={avatarFileRef} hidden onChange={onSelectFile} accept="image/png, image/jpeg, image/gif"/>
-                    <h3 className="font-bold text-xl mt-2 text-center md:text-left text-slate-800 break-all">{profile.realName || currentUser.username}</h3>
-                    <p className="text-slate-500 text-center md:text-left break-all">@{currentUser.username}</p>
+                    <h3 className="font-bold text-xl text-slate-800 truncate w-full">{profile.realName || currentUser.username}</h3>
+                    <p className="text-slate-500 text-sm">@{currentUser.username}</p>
+                    {subscription?.status === 'active' && <span className="mt-2 px-3 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-full border border-amber-200 flex items-center gap-1"><Crown className="w-3 h-3" /> Premium</span>}
                 </div>
-                <h2 className="text-lg font-semibold mb-3 text-slate-700 sr-only md:not-sr-only">Cài đặt</h2>
+                
                 <nav className="space-y-1">
-                    {tabs.map((tab) => ( <button key={tab.id} onClick={() => setSettingsTab(tab.id)} className={`w-full flex items-center px-4 py-2 text-sm font-medium rounded-md text-left transition-colors ${ settingsTab === tab.id ? "bg-indigo-100 text-indigo-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-800" }`}> <tab.icon className={`w-5 h-5 mr-3 flex-shrink-0 ${settingsTab === tab.id ? 'text-indigo-600' : 'text-slate-400'}`} /> {tab.label} </button> ))}
+                    {tabs.map((tab) => (
+                        <button key={tab.id} onClick={() => setSettingsTab(tab.id)}
+                            className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-lg text-left transition-colors ${ settingsTab === tab.id ? "bg-indigo-600 text-white shadow-md shadow-indigo-200" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900" }`}>
+                            <tab.icon className={`w-5 h-5 mr-3 flex-shrink-0 ${settingsTab === tab.id ? 'text-white' : 'text-slate-400'}`} /> {tab.label}
+                        </button>
+                    ))}
                 </nav>
             </div>
 
-            {/* Right Content Area */}
-            <div className="md:col-span-3">
-                <div className="bg-white rounded-xl shadow-md p-6 sm:p-8 border border-slate-200">
-                    {/* Basic Info Tab */}
+            {/* Content */}
+            <div className="lg:col-span-3">
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 min-h-[500px]">
                     {settingsTab === "basic-info" && (
-                        <div className="space-y-6">
-                            <h3 className="text-xl font-bold text-slate-800">Thông tin cơ bản</h3>
-                            {/* Input fields for realName, gender, country, birthday */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div> <label htmlFor="realName" className="block text-sm font-medium text-slate-700 mb-1">Tên hiển thị</label> <input id="realName" value={profile.realName || ''} onChange={e => setProfile({...profile, realName: e.target.value})} className="input-field" /> </div>
-                                <div> <label htmlFor="gender" className="block text-sm font-medium text-slate-700 mb-1">Giới tính</label> <select id="gender" value={profile.gender || ''} onChange={e => setProfile({...profile, gender: e.target.value as any})} className="input-field bg-white"> <option value="Male">Nam</option> <option value="Female">Nữ</option> <option value="Other">Bí mật!?</option> </select> </div>
-                                <div> <label htmlFor="country" className="block text-sm font-medium text-slate-700 mb-1">Quốc gia/Vị trí</label> <input id="country" value={profile.country || ''} onChange={e => setProfile({...profile, country: e.target.value})} className="input-field" /> </div>
-                                <div> <label htmlFor="birthday" className="block text-sm font-medium text-slate-700 mb-1">Ngày sinh</label> <input id="birthday" type="date" value={profile.birthday || ''} onChange={e => setProfile({...profile, birthday: e.target.value})} className="input-field" /> </div>
-                            </div>
-                            {/* Summary textarea */}
-                            <div> <label htmlFor="summary" className="block text-sm font-medium text-slate-700 mb-1">Giới thiệu ngắn</label> <textarea id="summary" value={profile.summary || ''} onChange={e => setProfile({...profile, summary: e.target.value})} rows={3} className="input-field" placeholder="Viết một vài điều về bạn..."/> </div>
-                             {/* Education Section */}
+                        <div className="space-y-8 animate-fade-in">
                             <div>
-                                <h4 className="text-lg font-semibold text-slate-800 mb-3">Học vấn</h4>
-                                {editingEducation.map((edu, index) => (
-                                    <div key={edu.id || index} className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 p-3 border rounded-md relative">
-                                        <input type="text" placeholder="Trường học" value={edu.school} onChange={e => updateEducation(edu.id, 'school', e.target.value)} className="input-field text-sm md:col-span-1"/>
-                                        <input type="text" placeholder="Bằng cấp/Chuyên ngành" value={edu.degree} onChange={e => updateEducation(edu.id, 'degree', e.target.value)} className="input-field text-sm md:col-span-1"/>
-                                        <input type="text" placeholder="Thời gian (vd: 2018-2022)" value={edu.duration} onChange={e => updateEducation(edu.id, 'duration', e.target.value)} className="input-field text-sm md:col-span-1"/>
-                                        <button onClick={() => removeEducation(edu.id)} className="absolute top-1 right-1 text-red-500 hover:text-red-700 p-1 rounded-full hover:bg-red-100">&times;</button>
-                                    </div>
-                                ))}
-                                <button onClick={addEducation} className="text-sm text-indigo-600 font-semibold hover:underline">+ Thêm học vấn</button>
+                                <h3 className={sectionTitle}>Thông tin cá nhân</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div> <label htmlFor="realName" className={labelClass}>Tên hiển thị</label> <input id="realName" value={profile.realName || ''} onChange={e => setProfile({...profile, realName: e.target.value})} className={inputClass} /> </div>
+                                    <div> <label htmlFor="gender" className={labelClass}>Giới tính</label> <select id="gender" value={profile.gender || ''} onChange={e => setProfile({...profile, gender: e.target.value as any})} className={inputClass}> <option value="Male">Nam</option> <option value="Female">Nữ</option> <option value="Other">Khác</option> </select> </div>
+                                    <div> <label htmlFor="country" className={labelClass}>Quốc gia</label> <input id="country" value={profile.country || ''} onChange={e => setProfile({...profile, country: e.target.value})} className={inputClass} /> </div>
+                                    <div> <label htmlFor="birthday" className={labelClass}>Ngày sinh</label> <input id="birthday" type="date" value={profile.birthday || ''} onChange={e => setProfile({...profile, birthday: e.target.value})} className={inputClass} /> </div>
+                                    <div className="md:col-span-2"> <label htmlFor="summary" className={labelClass}>Giới thiệu ngắn</label> <textarea id="summary" value={profile.summary || ''} onChange={e => setProfile({...profile, summary: e.target.value})} rows={3} className={inputClass} placeholder="Mô tả bản thân..." /> </div>
+                                </div>
                             </div>
 
-                             {/* Work Experience Section */}
+                            <hr className="border-slate-100" />
+
                             <div>
-                                <h4 className="text-lg font-semibold text-slate-800 mb-3">Kinh nghiệm làm việc</h4>
-                                {editingWork.map((work, index) => (
-                                    <div key={work.id || index} className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 p-3 border rounded-md relative">
-                                        <input type="text" placeholder="Chức vụ" value={work.title} onChange={e => updateWork(work.id, 'title', e.target.value)} className="input-field text-sm md:col-span-1"/>
-                                        <input type="text" placeholder="Công ty" value={work.company} onChange={e => updateWork(work.id, 'company', e.target.value)} className="input-field text-sm md:col-span-1"/>
-                                        <input type="text" placeholder="Thời gian (vd: 2022-Nay)" value={work.duration} onChange={e => updateWork(work.id, 'duration', e.target.value)} className="input-field text-sm md:col-span-1"/>
-                                        <button onClick={() => removeWork(work.id)} className="absolute top-1 right-1 text-red-500 hover:text-red-700 p-1 rounded-full hover:bg-red-100">&times;</button>
-                                    </div>
-                                ))}
-                                <button onClick={addWork} className="text-sm text-indigo-600 font-semibold hover:underline">+ Thêm kinh nghiệm</button>
+                                <h3 className={sectionTitle}>Học vấn & Kinh nghiệm</h3>
+                                <div className="space-y-4 mb-6">
+                                    <label className="text-sm font-semibold text-slate-700">Học vấn</label>
+                                    {editingEducation.map((edu, index) => (
+                                        <div key={edu.id || index} className="flex gap-2 items-start">
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 flex-1">
+                                                <input placeholder="Trường học" value={edu.school} onChange={e => updateEducation(edu.id, 'school', e.target.value)} className={inputClass}/>
+                                                <input placeholder="Chuyên ngành" value={edu.degree} onChange={e => updateEducation(edu.id, 'degree', e.target.value)} className={inputClass}/>
+                                                <input placeholder="Niên khóa" value={edu.duration} onChange={e => updateEducation(edu.id, 'duration', e.target.value)} className={inputClass}/>
+                                            </div>
+                                            <button onClick={() => removeEducation(edu.id)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition">×</button>
+                                        </div>
+                                    ))}
+                                    <button onClick={addEducation} className="text-sm text-indigo-600 font-semibold hover:underline">+ Thêm trường học</button>
+                                </div>
+                                
+                                <div className="space-y-4">
+                                    <label className="text-sm font-semibold text-slate-700">Kinh nghiệm làm việc</label>
+                                    {editingWork.map((work, index) => (
+                                        <div key={work.id || index} className="flex gap-2 items-start">
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 flex-1">
+                                                <input placeholder="Chức vụ" value={work.title} onChange={e => updateWork(work.id, 'title', e.target.value)} className={inputClass}/>
+                                                <input placeholder="Công ty" value={work.company} onChange={e => updateWork(work.id, 'company', e.target.value)} className={inputClass}/>
+                                                <input placeholder="Thời gian" value={work.duration} onChange={e => updateWork(work.id, 'duration', e.target.value)} className={inputClass}/>
+                                            </div>
+                                            <button onClick={() => removeWork(work.id)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition">×</button>
+                                        </div>
+                                    ))}
+                                    <button onClick={addWork} className="text-sm text-indigo-600 font-semibold hover:underline">+ Thêm công việc</button>
+                                </div>
                             </div>
 
-                            <hr className="border-slate-200"/>
-                            {/* Social Links */}
-                            <h3 className="text-lg font-semibold text-slate-800">Liên kết mạng xã hội</h3>
-                            <p className="text-xs text-slate-500 mb-4">Thêm URL đầy đủ, bao gồm https://</p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
-                                <div className="flex items-center space-x-2"> <label htmlFor="website" className="social-icon-label" title="Website"><Globe size={20}/></label> <input id="website" type="url" placeholder="https://your-website.com" value={profile.website || ''} onChange={e => setProfile({...profile, website: e.target.value})} className="social-input"/> </div>
-                                <div className="flex items-center space-x-2"> <label htmlFor="github" className="social-icon-label" title="Github"><Github size={20}/></label> <input id="github" type="url" placeholder="https://github.com/username" value={profile.github || ''} onChange={e => setProfile({...profile, github: e.target.value})} className="social-input"/> </div>
-                                <div className="flex items-center space-x-2"> <label htmlFor="linkedin" className="social-icon-label" title="LinkedIn"><Linkedin size={20}/></label> <input id="linkedin" type="url" placeholder="https://linkedin.com/in/username" value={profile.linkedin || ''} onChange={e => setProfile({...profile, linkedin: e.target.value})} className="social-input"/> </div>
-                                <div className="flex items-center space-x-2"> <label htmlFor="twitter" className="social-icon-label" title="X (Twitter)"><Twitter size={20}/></label> <input id="twitter" type="url" placeholder="https://x.com/username" value={profile.twitter || ''} onChange={e => setProfile({...profile, twitter: e.target.value})} className="social-input"/> </div>
+                            <hr className="border-slate-100" />
+
+                            <div>
+                                <h3 className={sectionTitle}>Mạng xã hội</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="flex items-center gap-3"> <Globe className="w-5 h-5 text-slate-400" /> <input placeholder="Website URL" value={profile.website || ''} onChange={e => setProfile({...profile, website: e.target.value})} className={inputClass} /> </div>
+                                    <div className="flex items-center gap-3"> <Github className="w-5 h-5 text-slate-400" /> <input placeholder="Github URL" value={profile.github || ''} onChange={e => setProfile({...profile, github: e.target.value})} className={inputClass} /> </div>
+                                    <div className="flex items-center gap-3"> <Linkedin className="w-5 h-5 text-slate-400" /> <input placeholder="LinkedIn URL" value={profile.linkedin || ''} onChange={e => setProfile({...profile, linkedin: e.target.value})} className={inputClass} /> </div>
+                                    <div className="flex items-center gap-3"> <Twitter className="w-5 h-5 text-slate-400" /> <input placeholder="Twitter/X URL" value={profile.twitter || ''} onChange={e => setProfile({...profile, twitter: e.target.value})} className={inputClass} /> </div>
+                                </div>
                             </div>
                         </div>
                     )}
 
-                    {/* Account Tab */}
                     {settingsTab === "account" && (
-                        <div className="space-y-6">
-                            <h3 className="text-xl font-bold text-slate-800">Tài khoản</h3>
-                            <div> <label htmlFor="username-acc" className="input-label">Tên đăng nhập (Username)</label> <input id="username-acc" value={username} onChange={e => setUsername(e.target.value)} required className="input-field"/> <p className="input-hint">Tên này sẽ hiển thị công khai.</p> </div>
-                            <div> <label htmlFor="email-acc" className="input-label">Email</label> <input id="email-acc" type="email" value={email} onChange={e => setEmail(e.target.value)} required className="input-field"/> <p className="input-hint">Dùng để đăng nhập và nhận thông báo.</p> </div>
-                            <div> <button onClick={() => setChangePasswordModalOpen(true)} className="link-button"> Đổi mật khẩu... </button> </div>
-                            <hr className="border-slate-200"/>
-                            <h3 className="text-lg font-semibold text-red-700">Vùng nguy hiểm</h3>
-                            <div className="danger-zone">
-                                <div> <p className="font-semibold text-red-800">Xóa tài khoản</p> <p className="text-sm text-red-700 mt-1 max-w-md"> Sau khi xóa, tài khoản và tất cả dữ liệu sẽ bị xóa vĩnh viễn. </p> </div>
-                                <button onClick={handleDeleteAccount} disabled={currentUser.id === OWNER_ID || loading} className="danger-button"> {loading ? <LoadingSpinner size="sm"/> : 'Xóa tài khoản này'} </button>
+                        <div className="space-y-8 animate-fade-in">
+                            <h3 className={sectionTitle}>Cài đặt Tài khoản</h3>
+                            <div className="max-w-md space-y-4">
+                                <div> <label className={labelClass}>Username</label> <input value={username} onChange={e => setUsername(e.target.value)} className={inputClass} /> </div>
+                                <div> <label className={labelClass}>Email</label> <input type="email" value={email} onChange={e => setEmail(e.target.value)} className={inputClass} /> </div>
+                                <button onClick={() => setChangePasswordModalOpen(true)} className="text-indigo-600 font-semibold hover:underline text-sm">Đổi mật khẩu</button>
+                            </div>
+                            
+                            <div className="pt-6 border-t border-red-100">
+                                <h4 className="text-lg font-bold text-red-700 mb-2">Vùng nguy hiểm</h4>
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                                    <div>
+                                        <p className="font-semibold text-red-900">Xóa tài khoản vĩnh viễn</p>
+                                        <p className="text-sm text-red-700">Hành động này không thể hoàn tác. Mọi dữ liệu sẽ bị mất.</p>
+                                    </div>
+                                    <button onClick={handleDeleteAccount} disabled={currentUser.id === OWNER_ID || loading} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg text-sm shadow-sm transition disabled:opacity-50">
+                                        {loading ? <LoadingSpinner size="sm"/> : 'Xóa tài khoản'}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     )}
 
-                     {/* Privacy Tab */}
                     {settingsTab === "privacy" && (
-                        <div className="space-y-6">
-                            <h3 className="text-xl font-bold text-slate-800">Thiết lập Riêng tư</h3>
-                            <div className="privacy-item"> <div> <p className="font-medium text-slate-700">Hiển thị trên bảng xếp hạng</p> <p className="text-xs text-slate-500">Cho phép tên của bạn xuất hiện công khai.</p> </div> <ToggleSwitch checked={profile.showOnLeaderboard ?? true} onChange={(val) => setProfile({...profile, showOnLeaderboard: val})} /> </div>
-                            <div className="privacy-item"> <div> <p className="font-medium text-slate-700">Hiển thị lịch sử nộp bài</p> <p className="text-xs text-slate-500">Cho phép người khác xem lịch sử nộp bài.</p> </div> <ToggleSwitch checked={profile.showSubmissionHistory ?? true} onChange={(val) => setProfile({...profile, showSubmissionHistory: val})} /> </div>
-                             <div className="privacy-item"> <div> <p className="font-medium text-slate-700">Cho phép nhà tuyển dụng liên hệ</p> <p className="text-xs text-slate-500">Cho phép công ty xem hồ sơ và liên hệ.</p> </div> <ToggleSwitch checked={profile.allowJobContact ?? true} onChange={(val) => setProfile({...profile, allowJobContact: val})} /> </div>
+                        <div className="space-y-6 animate-fade-in">
+                            <h3 className={sectionTitle}>Quyền riêng tư</h3>
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between p-4 border border-slate-200 rounded-lg"> <div> <p className="font-semibold text-slate-800">Hiển thị trên bảng xếp hạng</p> <p className="text-sm text-slate-500">Tên bạn sẽ xuất hiện công khai trên Leaderboard.</p> </div> <ToggleSwitch checked={profile.showOnLeaderboard ?? true} onChange={(val) => setProfile({...profile, showOnLeaderboard: val})} /> </div>
+                                <div className="flex items-center justify-between p-4 border border-slate-200 rounded-lg"> <div> <p className="font-semibold text-slate-800">Công khai lịch sử nộp bài</p> <p className="text-sm text-slate-500">Người khác có thể xem các bài giải của bạn.</p> </div> <ToggleSwitch checked={profile.showSubmissionHistory ?? true} onChange={(val) => setProfile({...profile, showSubmissionHistory: val})} /> </div>
+                                <div className="flex items-center justify-between p-4 border border-slate-200 rounded-lg"> <div> <p className="font-semibold text-slate-800">Liên hệ tuyển dụng</p> <p className="text-sm text-slate-500">Cho phép nhà tuyển dụng xem hồ sơ và liên hệ.</p> </div> <ToggleSwitch checked={profile.allowJobContact ?? true} onChange={(val) => setProfile({...profile, allowJobContact: val})} /> </div>
+                            </div>
                         </div>
                     )}
 
-                    {/* Notifications Tab */}
                     {settingsTab === "notifications" && (
-                         <div>
-                            <h3 className="text-xl font-bold mb-4 text-slate-800">Thiết lập Thông báo</h3>
-                            <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                                <table className="w-full text-sm border-collapse">
-                                    <thead className="bg-slate-50"> <tr className="border-b border-slate-300"> <th className="table-header">Loại thông báo</th> <th className="table-header text-center w-20">Email</th> <th className="table-header text-center w-20">Trên trang</th> </tr> </thead>
-                                    <tbody className="divide-y divide-slate-200">
-                                        {notificationRows.map((row) => ( <tr key={row.key} className="hover:bg-slate-50/50"> <td className="table-cell">{row.label}</td> <td className="table-cell text-center"> <ToggleSwitch checked={profile.notifications?.[row.key]?.email ?? false} onChange={(val) => handleNotifChange(row.key, 'email', val)} /> </td> <td className="table-cell text-center"> <ToggleSwitch checked={profile.notifications?.[row.key]?.site ?? false} onChange={(val) => handleNotifChange(row.key, 'site', val)} /> </td> </tr> ))}
+                        <div className="animate-fade-in">
+                            <h3 className={sectionTitle}>Tùy chỉnh thông báo</h3>
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-slate-50 border-b border-slate-200">
+                                        <tr>
+                                            <th className="px-6 py-4 text-left font-semibold text-slate-700">Loại thông báo</th>
+                                            <th className="px-6 py-4 text-center font-semibold text-slate-700 w-24">Email</th>
+                                            <th className="px-6 py-4 text-center font-semibold text-slate-700 w-24">Web</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {notificationRows.map((row) => (
+                                            <tr key={row.key} className="hover:bg-slate-50/50">
+                                                <td className="px-6 py-4 text-slate-700 font-medium">{row.label}</td>
+                                                <td className="px-6 py-4 text-center"> <div className="flex justify-center"><ToggleSwitch checked={profile.notifications?.[row.key]?.email ?? false} onChange={(val) => handleNotifChange(row.key, 'email', val)} /></div> </td>
+                                                <td className="px-6 py-4 text-center"> <div className="flex justify-center"><ToggleSwitch checked={profile.notifications?.[row.key]?.site ?? false} onChange={(val) => handleNotifChange(row.key, 'site', val)} /></div> </td>
+                                            </tr>
+                                        ))}
                                     </tbody>
                                 </table>
                             </div>
@@ -250,68 +291,93 @@ export const SettingsPage: React.FC = () => {
                     )}
 
                     {settingsTab === "billing" && (
-                        <div className="space-y-6">
-                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Crown className="w-5 h-5 text-amber-500"/>Premium & Billing</h3>
-                            <div className="border border-slate-200 rounded-lg p-4 bg-amber-50">
-                                <div className="flex items-center justify-between">
+                        <div className="space-y-8 animate-fade-in">
+                            <h3 className={`${sectionTitle} flex items-center gap-2`}><Crown className="text-amber-500" /> Premium & Hóa đơn</h3>
+                            
+                            {/* Premium Status Card */}
+                            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-6">
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                                     <div>
-                                        <p className="text-sm text-slate-600">Trạng thái</p>
-                                        <p className="text-lg font-semibold text-slate-800">{subscription?.status || 'chưa kích hoạt'}</p>
+                                        <p className="text-amber-800 font-semibold mb-1">Trạng thái gói</p>
+                                        <div className="text-2xl font-bold text-slate-800 capitalize flex items-center gap-2">
+                                            {subscription?.status || 'Miễn phí'}
+                                            {subscription?.status === 'active' && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full border border-green-200">Đang hoạt động</span>}
+                                        </div>
+                                        <p className="text-sm text-amber-700/80 mt-2 max-w-lg">Nâng cấp lên Premium để mở khóa tính năng gợi ý AI, tải hóa đơn PDF và ưu tiên hàng chờ chấm bài.</p>
                                     </div>
-                                    <button onClick={() => startPremiumCheckout()} className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold px-3 py-2 rounded-lg transition">
-                                        <Crown className="w-4 h-4"/> Nâng cấp Premium
+                                    <button onClick={() => startPremiumCheckout()} className="shrink-0 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg shadow-sm shadow-amber-200 transition flex items-center gap-2">
+                                        <Crown className="w-5 h-5"/> Nâng cấp ngay
                                     </button>
                                 </div>
-                                <p className="text-xs text-slate-600 mt-2">Premium mở khóa gợi ý AI, invoice PDF và ưu tiên hàng chờ.</p>
                             </div>
-                            <div className="border border-slate-200 rounded-lg p-4 bg-white">
-                                <div className="flex items-center justify-between mb-3">
-                                    <div className="flex items-center gap-2 text-slate-700 font-semibold"><Receipt className="w-4 h-4 text-slate-500"/> Hóa đơn</div>
-                                    <button onClick={() => refreshBilling()} className="text-xs text-indigo-600 hover:text-indigo-800">Làm mới</button>
+
+                            {/* Redeem Key Section */}
+                            <div className="bg-white border border-slate-200 rounded-xl p-6">
+                                <h4 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Key className="w-4 h-4 text-indigo-500"/> Kích hoạt bằng mã (Redeem Code)</h4>
+                                <div className="flex gap-3 max-w-lg">
+                                    <input 
+                                        type="text" 
+                                        value={redeemKey} 
+                                        onChange={(e) => setRedeemKey(e.target.value)} 
+                                        placeholder="Nhập mã kích hoạt (VD: MLJ-PREM-...)" 
+                                        className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none"
+                                    />
+                                    <button onClick={handleRedeemKey} disabled={loading || !redeemKey} className="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed">
+                                        Kích hoạt
+                                    </button>
                                 </div>
+                                <p className="text-xs text-slate-500 mt-2">Nhập mã bản quyền bạn nhận được từ sự kiện hoặc quản trị viên.</p>
+                            </div>
+
+                            {/* Invoices List */}
+                            <div>
+                                <h4 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Receipt className="w-4 h-4 text-slate-500"/> Lịch sử hóa đơn</h4>
                                 {invoices && invoices.length > 0 ? (
-                                    <ul className="space-y-2">
-                                        {invoices.map((inv) => (
-                                            <li key={inv.id} className="flex items-center justify-between text-sm border border-slate-200 rounded-lg px-3 py-2">
-                                                <div>
-                                                    <div className="font-semibold text-slate-800">{inv.invoiceNumber || `INV-${inv.id}`}</div>
-                                                    <div className="text-xs text-slate-500">{(inv.amountCents / 100).toFixed(2)} {inv.currency?.toUpperCase()}</div>
-                                                </div>
-                                                <button onClick={() => downloadInvoicePdf(inv.id)} className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800"><Download className="w-4 h-4"/>Tải</button>
-                                            </li>
-                                        ))}
-                                    </ul>
+                                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                                                <tr>
+                                                    <th className="px-4 py-3 text-left">Số hóa đơn</th>
+                                                    <th className="px-4 py-3 text-left">Ngày</th>
+                                                    <th className="px-4 py-3 text-right">Số tiền</th>
+                                                    <th className="px-4 py-3 text-center">Tải về</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {invoices.map((inv) => (
+                                                    <tr key={inv.id} className="hover:bg-slate-50 transition">
+                                                        <td className="px-4 py-3 font-mono text-slate-700">{inv.invoiceNumber}</td>
+                                                        <td className="px-4 py-3 text-slate-600">{new Date(inv.issuedAt).toLocaleDateString('vi-VN')}</td>
+                                                        <td className="px-4 py-3 text-right font-medium text-slate-800">
+                                                            {(inv.amountCents / 100).toLocaleString('vi-VN', { minimumFractionDigits: 0 })} {inv.currency?.toUpperCase()}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-center">
+                                                            <button onClick={() => downloadInvoicePdf(inv.id)} className="text-indigo-600 hover:text-indigo-800 p-1 rounded hover:bg-indigo-50 transition" title="Tải PDF">
+                                                                <Download className="w-4 h-4"/>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 ) : (
-                                    <p className="text-sm text-slate-500">Chưa có hóa đơn.</p>
+                                    <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                                        <p className="text-slate-500 text-sm">Chưa có hóa đơn nào.</p>
+                                    </div>
                                 )}
                             </div>
                         </div>
                     )}
-
-                    {/* Save Button */}
-                     <div className="flex justify-end pt-6 mt-6 border-t border-slate-200">
-                        <button onClick={handleSave} disabled={loading} className="save-button"> {loading ? <LoadingSpinner size="sm"/> : 'Lưu thay đổi'} </button>
-                    </div>
                 </div>
-                 {/* Add some simple base styles (ideally move to index.css or App.css) */}
-                 <style>{`
-                    .input-label { display: block; text-sm font-medium text-slate-700 mb-1; }
-                    .input-field { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; box-shadow: inset 0 1px 2px 0 rgb(0 0 0 / 0.05); }
-                    .input-field:focus { outline: 2px solid transparent; outline-offset: 2px; border-color: #4f46e5; box-shadow: 0 0 0 2px #c7d2fe; }
-                    .input-hint { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
-                    .social-icon-label { width: 2rem; height: 2rem; display: flex; align-items: center; justify-content: center; color: #64748b; flex-shrink: 0; }
-                    .social-input { flex-grow: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; box-shadow: inset 0 1px 2px 0 rgb(0 0 0 / 0.05); font-size: 0.875rem; }
-                    .social-input:focus { outline: 2px solid transparent; outline-offset: 2px; border-color: #4f46e5; box-shadow: 0 0 0 2px #c7d2fe; }
-                    .link-button { font-size: 0.875rem; color: #4f46e5; font-weight: 600; } .link-button:hover { text-decoration: underline; }
-                    .danger-zone { display: flex; flex-direction: column; sm:flex-direction: row; justify-content: space-between; align-items: flex-start; sm:align-items: center; padding: 1rem; border: 1px solid #fecaca; border-radius: 0.5rem; background-color: #fef2f2; }
-                    .danger-button { margin-top: 0.75rem; sm:margin-top: 0; sm:margin-left: 1rem; flex-shrink: 0; font-size: 0.875rem; background-color: #dc2626; color: white; font-weight: 600; padding: 0.5rem 1rem; border-radius: 0.5rem; } .danger-button:hover { background-color: #b91c1c; } .danger-button:disabled { background-color: #fca5a5; cursor: not-allowed; }
-                    .privacy-item { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; }
-                    .table-header { padding: 0.75rem; text-align: left; font-weight: 600; color: #475569; }
-                    .table-cell { padding: 0.75rem; color: #334155; }
-                    .save-button { background-color: #4f46e5; color: white; font-weight: 700; padding: 0.75rem 1.25rem; border-radius: 0.5rem; min-width: 120px; display: flex; justify-content: center; align-items: center; } .save-button:hover { background-color: #4338ca; } .save-button:disabled { background-color: #a5b4fc; cursor: not-allowed; }
-                `}</style>
+                
+                {/* Global Save Button */}
+                <div className="mt-6 flex justify-end">
+                    <button onClick={handleSave} disabled={loading} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-200 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 disabled:transform-none flex items-center gap-2">
+                        {loading ? <LoadingSpinner size="sm" color="white" /> : 'Lưu thay đổi'}
+                    </button>
+                </div>
             </div>
         </div>
     );
 };
-

@@ -14,24 +14,39 @@ export const ProblemEditorPage: React.FC = () => {
         loading,
         setLoading,
         currentUser,
-        fetchAllData, // To refresh data after save
+        fetchAllData,
         setError,
-        showToast, // Use showToast for feedback
+        showToast,
         navigate,
     } = useAppContext();
 
     const isNew = editingProblem === "new";
-    const [pageError, setPageError] = useState(''); // Local error state for the editor page
+    const [pageError, setPageError] = useState('');
 
     // Authorization check
     if (!currentUser || (currentUser.role !== 'owner' && currentUser.role !== 'creator')) {
-        return <div className="p-8 text-center text-red-600">Bạn không có quyền tạo hoặc chỉnh sửa bài toán.</div>;
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50">
+                <div className="text-center p-8 bg-white rounded-xl shadow-sm border border-slate-200 max-w-md mx-4">
+                    <h2 className="text-xl font-bold text-red-600 mb-2">Không có quyền truy cập</h2>
+                    <p className="text-slate-600 mb-4">Bạn cần quyền Creator hoặc Owner để truy cập trang này.</p>
+                    <button onClick={() => navigate('problems')} className="text-indigo-600 font-medium hover:underline">
+                        Quay lại trang chủ
+                    </button>
+                </div>
+            </div>
+        );
     }
-    if (!editingProblem) {
-         return <div className="p-8 text-center text-slate-500">Không có bài toán nào đang được chỉnh sửa.</div>;
-     }
 
-    // Fetch full detail (including evaluation_script) when missing to restore script content
+    if (!editingProblem) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50">
+                 <div className="text-slate-500">Đang tải hoặc không có bài toán nào được chọn...</div>
+            </div>
+        );
+    }
+
+    // Fetch full detail if needed
     useEffect(() => {
         const fetchDetailIfNeeded = async () => {
             if (!editingProblem || editingProblem === 'new') return;
@@ -42,108 +57,118 @@ export const ProblemEditorPage: React.FC = () => {
                     setEditingProblem(data.problem);
                 }
             } catch (e) {
-                console.error("Không lấy được chi tiết bài toán để khôi phục script:", e);
+                console.error("Error fetching problem detail:", e);
+                showToast("Không thể tải chi tiết bài toán.", "error");
             }
         };
         fetchDetailIfNeeded();
-    }, [editingProblem, api, setEditingProblem]);
+    }, [editingProblem, api, setEditingProblem, showToast]);
 
 
     const handleSaveProblem = async (
-    data: Partial<Problem> & { evaluationScriptContent: string },
-    tagIds: number[],
-    metricIds: number[],
-    files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null },
+        data: Partial<Problem> & { evaluationScriptContent: string },
+        tagIds: number[],
+        metricIds: number[],
+        files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null },
     ) => {
-    if (!currentUser) return;
+        if (!currentUser) return;
 
-    setLoading(true);
-    setError("");
-    setPageError("");
+        setLoading(true);
+        setError("");
+        setPageError("");
 
-    try {
-        const formData = new FormData();
+        try {
+            const formData = new FormData();
 
-        const dataToSend = {
-        ...data,
-        tagIds,
-        metricIds,
-        // giữ lại datasets khi update
-        existingDatasets: (!isNew && editingProblem?.datasets) ? editingProblem.datasets : [],
-        };
+            const dataToSend = {
+                ...data,
+                tagIds,
+                metricIds,
+                existingDatasets: (!isNew && editingProblem?.datasets) ? editingProblem.datasets : [],
+            };
 
-        // Ground truth bắt buộc khi tạo mới
-        if (files.groundTruthFile) {
-        formData.append('groundTruthCsv', files.groundTruthFile, files.groundTruthFile.name);
-        } else if (isNew) {
-        throw new Error('Vui lòng chọn file Ground Truth (.csv)');
+            if (files.groundTruthFile) {
+                formData.append('groundTruthCsv', files.groundTruthFile, files.groundTruthFile.name);
+            } else if (isNew) {
+                throw new Error('Vui lòng tải lên file Ground Truth (đáp án) để chấm điểm.');
+            }
+
+            formData.append('problemData', JSON.stringify(dataToSend));
+            if (files.trainFile) formData.append('trainCsv', files.trainFile);
+            if (files.testFile) formData.append('testCsv', files.testFile);
+
+            if (isNew) {
+                if (!files.trainFile || !files.testFile) {
+                    throw new Error('Vui lòng tải lên đủ file Train và Test cho bài toán mới.');
+                }
+                await api.post('/problems', formData);
+                showToast('Tạo bài toán mới thành công!', 'success');
+            } else if (editingProblem) {
+                if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) {
+                    throw new Error('Bạn không có quyền chỉnh sửa bài toán này.');
+                }
+                await api.put(`/problems/${editingProblem.id}`, formData);
+                showToast('Cập nhật bài toán thành công!', 'success');
+            }
+
+            await fetchAllData();
+            setEditingProblem(null);
+            navigate('problems');
+        } catch (e: any) {
+            const msg = e?.message || 'Có lỗi xảy ra khi lưu bài toán.';
+            setPageError(msg);
+            showToast(msg, 'error');
+        } finally {
+            setLoading(false);
         }
-
-        formData.append('problemData', JSON.stringify(dataToSend));
-        if (files.trainFile) formData.append('trainCsv', files.trainFile);
-        if (files.testFile)  formData.append('testCsv',  files.testFile);
-
-        if (isNew) {
-        if (!files.trainFile || !files.testFile) {
-            throw new Error('Vui lòng tải lên cả file train và test cho bài toán mới.');
-        }
-        await api.post('/problems', formData);
-        showToast('Tạo bài toán thành công!', 'success');
-        } else if (editingProblem) {
-        if (currentUser.role !== 'owner' && editingProblem.authorId !== currentUser.id) {
-            throw new Error('Bạn không được phép chỉnh sửa bài toán này.');
-        }
-        await api.put(`/problems/${editingProblem.id}`, formData);
-        showToast('Cập nhật bài toán thành công!', 'success');
-        }
-
-        await fetchAllData();
-        setEditingProblem(null);
-        navigate('problems');
-    } catch (e: any) {
-        const msg = e?.message || 'Lưu bài toán thất bại';
-        setPageError(msg);
-        setError(msg);
-        showToast(msg, 'error');
-    } finally {
-        setLoading(false);
-    }
     };
 
-
     const handleCancel = () => {
-         setEditingProblem(null);
-         navigate('problems');
-         setError(""); // Clear potential errors when cancelling
-         setPageError("");
-     }
+        setEditingProblem(null);
+        navigate('problems');
+        setError("");
+        setPageError("");
+    }
 
     return (
-        // Added gradient background similar to the target UI
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 -m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-7xl mx-auto">
-                <button
-                    onClick={handleCancel}
-                    className="flex items-center text-indigo-600 font-semibold mb-6 group text-sm hover:text-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-2 rounded"
-                >
-                    <ArrowLeft className="mr-2 h-4 w-4 group-hover:-translate-x-1 transition-transform" />
-                    Quay lại danh sách bài toán
-                </button>
+        <div className="min-h-screen bg-slate-50 pb-20">
+            {/* Top Bar */}
+            <div className="bg-white border-b border-slate-200 mb-8 sticky top-0 z-30">
+                <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        <button
+                            onClick={handleCancel}
+                            className="p-2 -ml-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 rounded-full transition-colors"
+                            title="Quay lại"
+                        >
+                            <ArrowLeft className="h-5 w-5" />
+                        </button>
+                        <h1 className="text-lg font-bold text-slate-800">
+                            {isNew ? "Tạo cuộc thi mới" : `Chỉnh sửa: ${editingProblem.name}`}
+                        </h1>
+                    </div>
+                    <div className="text-sm text-slate-500">
+                         {isNew ? 'Bản nháp' : 'Đang chỉnh sửa'}
+                    </div>
+                </div>
+            </div>
 
-                 <h1 className="text-3xl sm:text-4xl font-bold mb-2 text-gray-900">
-                    {isNew ? "Tạo bài toán mới" : "Chỉnh sửa bài toán"}
-                 </h1>
-                 <p className="text-gray-600 mb-8">Thiết kế cuộc thi học máy của bạn.</p>
-
-                 {pageError && <div className="mb-6 p-4 bg-red-100 text-red-700 border border-red-300 rounded-lg shadow-sm">{pageError}</div>}
+            {/* Main Content */}
+            <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                {pageError && (
+                    <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3 text-red-700 animate-fade-in">
+                        <div className="mt-0.5 font-bold text-red-800">Lỗi:</div>
+                        <div>{pageError}</div>
+                    </div>
+                )}
 
                 <ProblemEditorForm
-                     initialProblem={editingProblem} // Pass the initial data
-                     onSave={handleSaveProblem}
-                     onCancel={handleCancel}
-                     allTags={allTags}
-                     allMetrics={allMetrics}
-                     loading={loading}
+                    initialProblem={editingProblem}
+                    onSave={handleSaveProblem}
+                    onCancel={handleCancel}
+                    allTags={allTags}
+                    allMetrics={allMetrics}
+                    loading={loading}
                 />
             </div>
         </div>

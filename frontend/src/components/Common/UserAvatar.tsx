@@ -1,69 +1,78 @@
+import React, { useMemo } from 'react';
 
-import React from 'react';
-import type { User, DiscussionPost, DiscussionComment } from '../../types';
-
-interface UserAvatarProps {
-  user: User | DiscussionPost | DiscussionComment | null; // Allow null
-  size?: string;
-  textClass?: string;
+interface User {
+    username: string;
+    avatarUrl?: string | null;
 }
 
-export const UserAvatar: React.FC<UserAvatarProps> = ({
-  user,
-  size = "w-10 h-10",
-  textClass = "text-lg",
+interface UserAvatarProps {
+    user?: User | null;
+    size?: 'sm' | 'md' | 'lg' | 'xl' | string; // Hỗ trợ cả preset và class tùy chỉnh
+    className?: string;
+    textClass?: string;
+}
+
+export const UserAvatar: React.FC<UserAvatarProps> = ({ 
+    user, 
+    size = 'md', 
+    className = '',
+    textClass
 }) => {
-  // Handle null user case gracefully
-  if (!user) {
-    // Render a placeholder or default avatar
+    // Map các size chuẩn sang Tailwind classes
+    const sizeClasses: Record<string, string> = {
+        xs: 'w-6 h-6 text-xs',
+        sm: 'w-8 h-8 text-xs',
+        md: 'w-10 h-10 text-sm',
+        lg: 'w-12 h-12 text-base',
+        xl: 'w-16 h-16 text-xl',
+        '2xl': 'w-24 h-24 text-3xl'
+    };
+
+    // Nếu size truyền vào là key trong map thì dùng, không thì dùng nguyên chuỗi đó (cho phép custom w-[px])
+    const finalSizeClass = sizeClasses[size] || size;
+    
+    // Tạo màu nền ngẫu nhiên dựa trên tên user nếu không có ảnh
+    const bgColor = useMemo(() => {
+        if (!user?.username) return 'bg-slate-200';
+        const colors = [
+            'bg-red-500', 'bg-orange-500', 'bg-amber-500', 
+            'bg-emerald-500', 'bg-teal-500', 'bg-cyan-500', 
+            'bg-blue-500', 'bg-indigo-500', 'bg-violet-500', 
+            'bg-fuchsia-500', 'bg-pink-500', 'bg-rose-500'
+        ];
+        let hash = 0;
+        for (let i = 0; i < user.username.length; i++) {
+            hash = user.username.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return colors[Math.abs(hash) % colors.length];
+    }, [user?.username]);
+
+    const initial = user?.username ? user.username.charAt(0).toUpperCase() : '?';
+
     return (
-      <div
-        className={`${size} rounded-full flex items-center justify-center overflow-hidden flex-shrink-0 bg-slate-300`}
-        aria-label="Default user avatar"
-      >
-        <span className={`font-bold text-white ${textClass}`}>?</span>
-      </div>
+        <div 
+            className={`
+                relative rounded-full flex items-center justify-center overflow-hidden shrink-0 border border-slate-100 shadow-sm
+                ${finalSizeClass} 
+                ${!user?.avatarUrl ? bgColor : 'bg-slate-100'}
+                ${className}
+            `}
+        >
+            {user?.avatarUrl ? (
+                <img 
+                    src={user.avatarUrl} 
+                    alt={user.username} 
+                    className="w-full h-full object-cover" // Quan trọng: Giúp ảnh không bị méo
+                    onError={(e) => {
+                        // Fallback nếu ảnh lỗi
+                        (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                />
+            ) : (
+                <span className={`font-bold text-white leading-none ${textClass || ''}`}>
+                    {initial}
+                </span>
+            )}
+        </div>
     );
-  }
-
-  const initial = user.username ? user.username[0].toUpperCase() : '?'; // Handle potentially missing username
-
-  return (
-    <div
-      className={`${size} rounded-full flex items-center justify-center overflow-hidden flex-shrink-0 ${
-        user.avatarUrl ? 'bg-slate-200' : user.avatarColor || 'bg-slate-400' // Default color if none provided
-      }`}
-      aria-label={`Avatar for ${user.username || 'user'}`}
-    >
-      {user.avatarUrl ? (
-        <img
-          src={user.avatarUrl}
-          alt={user.username || 'User Avatar'}
-          className="w-full h-full object-cover"
-          onError={(e) => {
-            // Optional: Handle image loading errors, e.g., show initials
-            const target = e.target as HTMLImageElement;
-            target.style.display = 'none'; // Hide broken image
-            // Optionally, replace with initials container
-            const parent = target.parentElement;
-            if (parent) {
-              // Check if initials aren't already there
-              if (!parent.querySelector('.initials-fallback')) {
-                  const initialsSpan = document.createElement('span');
-                  initialsSpan.className = `font-bold text-white ${textClass} initials-fallback`;
-                  initialsSpan.textContent = initial;
-                  parent.appendChild(initialsSpan);
-                  parent.classList.add(user.avatarColor || 'bg-slate-400'); // Add background color back
-              }
-            }
-
-          }}
-        />
-      ) : (
-        <span className={`font-bold text-white ${textClass}`}>
-          {initial}
-        </span>
-      )}
-    </div>
-  );
 };

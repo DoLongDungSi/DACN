@@ -34,6 +34,7 @@ services:
       # OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3-4b:free}
       OPENROUTER_API_KEY: 
       OPENROUTER_MODEL: x-ai/grok-4.1-fast:free
+      HINT_SYSTEM_PROMPT: Bạn là một chuyên gia AI mento. Hãy đưa ra gợi ý ngắn gọn, súc tích về cách giải quyết bài toán này mà không đưa ra code lời giải trực tiếp. Tập trung vào feature engineering và model selection.
     depends_on:
       db:
         condition: service_healthy

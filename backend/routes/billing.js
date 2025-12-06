@@ -30,21 +30,40 @@ const writeInvoicePdf = (invoice, user, subscription, outputPath) => {
   const stream = fs.createWriteStream(outputPath);
   doc.pipe(stream);
 
-  doc.fontSize(18).text('ML Judge Premium Invoice', { align: 'left' });
-  doc.moveDown();
-  doc.fontSize(12).fillColor('#111827');
-  doc.text(`Invoice #: ${invoice.invoice_number}`);
-  doc.text(`Issued At: ${new Date(invoice.issued_at).toISOString()}`);
-  doc.text(`Customer: ${user.username} (${user.email})`);
-  doc.text(`Plan: ${subscription.plan}`);
-  doc.text(`Status: ${invoice.status}`);
+  // Header
+  doc.fontSize(20).font('Helvetica-Bold').text('ML JUDGE', { align: 'left' });
+  doc.fontSize(10).font('Helvetica').text('Premium Service Invoice', { align: 'left' });
   doc.moveDown();
 
-  doc.text('Charges', { underline: true });
-  doc.text(`Amount: ${(invoice.amount_cents / 100).toFixed(2)} ${invoice.currency.toUpperCase()}`);
-  doc.moveDown(2);
-  doc.fontSize(10).fillColor('#6b7280');
-  doc.text('Thank you for supporting the platform. Premium unlocks AI hints and faster queues.');
+  // Meta info
+  doc.text(`Invoice Number: ${invoice.invoice_number}`);
+  doc.text(`Date Issued: ${new Date(invoice.issued_at).toLocaleDateString()}`);
+  doc.text(`Status: ${invoice.status.toUpperCase()}`);
+  doc.moveDown();
+
+  // Customer info
+  doc.text('Bill To:', { underline: true });
+  doc.text(`User: ${user.username}`);
+  doc.text(`Email: ${user.email}`);
+  doc.moveDown();
+
+  // Line Items
+  doc.rect(50, doc.y, 500, 25).fill('#f3f4f6');
+  doc.fillColor('#000').text('Description', 60, doc.y - 18);
+  doc.text('Amount', 450, doc.y - 18);
+  doc.moveDown();
+
+  const amountText = `${(invoice.amount_cents / 100).toFixed(2)} ${invoice.currency.toUpperCase()}`;
+  doc.text(`Premium Subscription (${subscription.plan})`, 60, doc.y + 10);
+  doc.text(amountText, 450, doc.y);
+
+  doc.moveDown(4);
+  doc.text('Total:', 380, doc.y, { width: 60, align: 'right' });
+  doc.font('Helvetica-Bold').text(amountText, 450, doc.y - 10);
+
+  // Footer
+  doc.fontSize(10).font('Helvetica').fillColor('#6b7280');
+  doc.text('Thank you for using ML Judge.', 50, 700, { align: 'center' });
 
   doc.end();
   return new Promise((resolve, reject) => {
@@ -53,16 +72,14 @@ const writeInvoicePdf = (invoice, user, subscription, outputPath) => {
   });
 };
 
-router.post('/checkout', authMiddleware, async (req, res) => {
-  const userId = req.userId;
-  const plan = req.body?.plan || 'premium-monthly';
-  const currency = (req.body?.currency || 'usd').toLowerCase();
-  const providerRef = req.body?.paymentMethod || 'internal-mock';
+// --- Mock Key Verification ---
+const isValidKey = (key) => {
+  // Logic giả lập: Key phải bắt đầu bằng MLJ-PREM- và có độ dài nhất định
+  return key && key.startsWith('MLJ-PREM-') && key.length > 15;
+};
 
-  const pricing = PLAN_PRICING[plan] || PLAN_PRICING['premium-monthly'];
-  const amountCents = pricing.amountCents;
-  const renewInterval = pricing.interval;
-
+// Helper to process premium activation
+const activatePremium = async (userId, plan, amountCents, currency, provider, providerRef, res) => {
   let client;
   try {
     client = await pool.connect();
@@ -74,7 +91,10 @@ router.post('/checkout', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'User not found.' });
     }
     const user = userRes.rows[0];
+    const pricing = PLAN_PRICING[plan] || PLAN_PRICING['premium-monthly'];
+    const renewInterval = pricing.interval;
 
+    // 1. Upsert Subscription
     const existingSubRes = await client.query(
       'SELECT * FROM subscriptions WHERE user_id = $1 ORDER BY started_at DESC LIMIT 1',
       [userId]
@@ -82,6 +102,7 @@ router.post('/checkout', authMiddleware, async (req, res) => {
 
     let subscriptionId;
     let subscriptionRow;
+    
     if (existingSubRes.rows.length) {
       const sub = existingSubRes.rows[0];
       const updated = await client.query(
@@ -104,14 +125,16 @@ router.post('/checkout', authMiddleware, async (req, res) => {
       subscriptionId = subscriptionRow.id;
     }
 
+    // 2. Record Payment
     const paymentInserted = await client.query(
       `INSERT INTO payments (user_id, subscription_id, provider, provider_ref, status, amount_cents, currency)
        VALUES ($1, $2, $3, $4, 'succeeded', $5, $6)
        RETURNING *`,
-      [userId, subscriptionId, 'internal', providerRef, amountCents, currency]
+      [userId, subscriptionId, provider, providerRef, amountCents, currency]
     );
     const paymentRow = paymentInserted.rows[0];
 
+    // 3. Create Invoice
     const invoiceInserted = await client.query(
       `INSERT INTO invoices (user_id, subscription_id, payment_id, amount_cents, currency, status, issued_at, invoice_number)
        VALUES ($1, $2, $3, $4, $5, 'paid', NOW(), $6)
@@ -120,7 +143,7 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     );
     const invoiceRow = invoiceInserted.rows[0];
 
-    // Generate PDF invoice and store relative path
+    // 4. Generate PDF
     const pdfFilename = `${invoiceRow.invoice_number || uuidv4()}.pdf`;
     const pdfAbsolute = path.join(INVOICE_DIR, pdfFilename);
     await writeInvoicePdf(invoiceRow, user, subscriptionRow, pdfAbsolute);
@@ -132,19 +155,45 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     await client.query('COMMIT');
 
     const downloadUrl = `/api/billing/invoices/${invoiceRow.id}/pdf`;
-    res.status(201).json({
+    return res.status(201).json({
+      success: true,
+      message: 'Premium activated successfully',
       subscription: toCamelCase(subscriptionRow),
       payment: toCamelCase(paymentRow),
       invoice: toCamelCase({ ...invoiceRow, pdf_path: pdfRelative }),
       downloadUrl,
     });
+
   } catch (error) {
-    if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error('Rollback failed', rbErr); } }
-    console.error('Billing checkout error:', error);
-    res.status(500).json({ message: 'Unable to create premium payment right now.' });
+    if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) {} }
+    console.error('Premium activation error:', error);
+    return res.status(500).json({ message: 'Unable to process request.' });
   } finally {
     if (client) client.release();
   }
+};
+
+// Checkout endpoint (Giữ nguyên logic cũ nhưng refactor vào helper)
+router.post('/checkout', authMiddleware, async (req, res) => {
+  const plan = req.body?.plan || 'premium-monthly';
+  const currency = (req.body?.currency || 'usd').toLowerCase();
+  const pricing = PLAN_PRICING[plan] || PLAN_PRICING['premium-monthly'];
+  
+  // Mock payment provider
+  return activatePremium(req.userId, plan, pricing.amountCents, currency, 'internal', 'mock-checkout-ref', res);
+});
+
+// Redeem Key endpoint (Mới)
+router.post('/redeem', authMiddleware, async (req, res) => {
+  const { key } = req.body;
+  
+  if (!isValidKey(key)) {
+    return res.status(400).json({ message: 'Mã kích hoạt không hợp lệ hoặc đã hết hạn.' });
+  }
+
+  // Key xịn thì free tiền (0 cents) hoặc set giá trị tùy logic
+  // Ở đây tôi set giá trị tượng trưng 0 VND để hóa đơn ghi nhận là quà tặng/key
+  return activatePremium(req.userId, 'premium-monthly', 0, 'vnd', 'license_key', key, res);
 });
 
 router.get('/me', authMiddleware, async (req, res) => {

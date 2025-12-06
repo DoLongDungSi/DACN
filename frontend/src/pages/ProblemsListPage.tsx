@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
-import type { Problem, Tag } from '../types';
+import type { Problem, Tag, Difficulty } from '../types'; // Removed unused imports
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 import { PlusCircle, Search, SlidersHorizontal, Users, Star, Clock, Tag as TagIcon } from 'lucide-react';
+import { FilterPopup } from '../components/Problem/FilterPopup';
 
 const difficultyBadge: Record<string, string> = {
     easy: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -32,7 +33,11 @@ export const ProblemsListPage: React.FC = () => {
 
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedFilterTags, setSelectedFilterTags] = useState<Tag[]>([]);
-    const [difficultyFilter, setDifficultyFilter] = useState<'all' | 'easy' | 'medium' | 'hard'>('all');
+    const [difficultyFilter, setDifficultyFilter] = useState<Difficulty | 'all'>('all');
+    
+    // Filter Popup State
+    const [isFilterOpen, setIsFilterOpen] = useState(false);
+    const filterButtonRef = useRef<HTMLButtonElement>(null);
 
     const handleProblemClick = (problem: Problem) => {
         setSelectedProblem(problem);
@@ -52,7 +57,7 @@ export const ProblemsListPage: React.FC = () => {
         return problems
             .filter((problem) => {
                 const nameMatch = problem.name.toLowerCase().includes(searchTerm.toLowerCase());
-                const tagMatch = selectedFilterTags.every((tag) => problem.tags.includes(tag.id));
+                const tagMatch = selectedFilterTags.length === 0 || selectedFilterTags.every((tag) => problem.tags.includes(tag.id));
                 const difficultyOk = difficultyFilter === 'all' ? true : problem.difficulty === difficultyFilter;
                 return nameMatch && tagMatch && difficultyOk;
             })
@@ -62,228 +67,174 @@ export const ProblemsListPage: React.FC = () => {
     const tagMap = useMemo(() => Object.fromEntries(allTags.map((t) => [t.id, t.name])), [allTags]);
 
     const participantCountByProblem = useMemo(() => {
-        const userSets = new Map<number, Set<number>>();
-        submissions.forEach((sub) => {
-            if (!userSets.has(sub.problemId)) {
-                userSets.set(sub.problemId, new Set());
-            }
-            userSets.get(sub.problemId)!.add(sub.userId);
-        });
         const counts = new Map<number, number>();
-        userSets.forEach((set, id) => counts.set(id, set.size));
+        submissions.forEach(s => {
+             if(!counts.has(s.problemId)) counts.set(s.problemId, 0);
+             counts.set(s.problemId, counts.get(s.problemId)! + 1);
+        });
         return counts;
     }, [submissions]);
 
-    const ProblemCard = ({ problem }: { problem: Problem }) => {
-        const problemTags = problem.tags.map((tagId) => tagMap[tagId]).filter(Boolean).slice(0, 4);
-        const cover = problem.coverImageUrl;
-        const participants = participantCountByProblem.get(problem.id) || 0;
-        const canEditDelete =
-            currentUser && (currentUser.role === 'owner' || problem.authorId === currentUser.id);
-        const summaryText =
-            problem.summary ||
-            toPlainText(problem.content).slice(0, 180) ||
-            'No description provided yet.';
-
-        return (
-            <div
-                onClick={() => handleProblemClick(problem)}
-                className="group h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg cursor-pointer"
-            >
-                <div className="relative h-40 bg-slate-100">
-                    {cover ? (
-                        <img src={cover} alt={problem.name} className="h-full w-full object-cover" />
-                    ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm">
-                            <TagIcon className="w-5 h-5 mr-2" />
-                            No cover image
-                        </div>
-                    )}
-                    <div className="absolute top-3 right-3 inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
-                        <span
-                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${difficultyBadge[problem.difficulty] || 'bg-slate-100 text-slate-700 border-slate-200'}`}
-                        >
-                            {problem.difficulty}
-                        </span>
-                        <span className="text-slate-500 uppercase tracking-wide text-[10px]">
-                            {problem.problemType}
-                        </span>
-                    </div>
-                </div>
-                <div className="p-5 space-y-3">
-                    <h3 className="text-lg font-semibold text-slate-900 line-clamp-2">{problem.name}</h3>
-                    <p className="text-sm text-slate-600 line-clamp-3">{summaryText}</p>
-                    {problemTags.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                            {problemTags.map((tag) => (
-                                <span
-                                    key={tag}
-                                    className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200"
-                                >
-                                    {tag}
-                                </span>
-                            ))}
-                        </div>
-                    )}
-                    <div className="grid grid-cols-3 gap-3 text-slate-600 text-xs">
-                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                            <Users className="w-4 h-4 text-slate-500" />
-                            <div>
-                                <div className="text-slate-900 font-semibold">{participants}</div>
-                                <div>Teams</div>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                            <Star className="w-4 h-4 text-slate-500" />
-                            <div>
-                                <div className="text-slate-900 font-semibold">{problem.metrics?.length || 1}</div>
-                                <div>Metrics</div>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                            <Clock className="w-4 h-4 text-slate-500" />
-                            <div>
-                                <div className="text-slate-900 font-semibold">Open</div>
-                                <div>Rolling</div>
-                            </div>
-                        </div>
-                    </div>
-                    {canEditDelete && (
-                        <div className="flex items-center justify-end gap-2 pt-1">
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditingProblem(problem);
-                                    navigate('problem-editor');
-                                }}
-                                className="text-xs font-semibold text-slate-700 px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-100"
-                            >
-                                Edit
-                            </button>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteProblem(problem.id);
-                                }}
-                                className="text-xs font-semibold text-rose-600 px-3 py-2 rounded-lg border border-rose-200 hover:bg-rose-50"
-                            >
-                                Delete
-                            </button>
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center h-full py-16 text-slate-500">
-                <LoadingSpinner />
-                <span className="ml-3">Loading competitions...</span>
-            </div>
-        );
-    }
+    const activeFiltersCount = (difficultyFilter !== 'all' ? 1 : 0) + selectedFilterTags.length;
 
     return (
-        <div className="bg-slate-50 text-slate-900">
-            <div className="max-w-7xl mx-auto space-y-6">
-                <div className="space-y-3">
-                    <div className="flex items-center justify-between flex-wrap gap-3">
-                        <div>
-                            <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Competitions</p>
-                            <h1 className="text-3xl sm:text-4xl font-bold">Machine Learning Competitions</h1>
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap justify-end">
-                            {canCreate && (
-                                <button
-                                    onClick={() => {
-                                        setEditingProblem('new');
-                                        navigate('problem-editor');
-                                    }}
-                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 text-white shadow hover:bg-indigo-700"
-                                >
-                                    <PlusCircle className="w-4 h-4" /> Host a competition
-                                </button>
-                            )}
-                        </div>
+        <div className="animate-fade-in max-w-5xl mx-auto">
+            {/* Header Section */}
+            <div className="mb-8">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+                    <div>
+                        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">Cuộc thi & Bài toán</h1>
+                        <p className="text-slate-500">Khám phá, tham gia và rèn luyện kỹ năng Machine Learning.</p>
                     </div>
-                    <div className="relative max-w-4xl">
-                        <Search className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+                     {canCreate && (
+                        <button
+                            onClick={() => {
+                                setEditingProblem('new');
+                                navigate('problem-editor');
+                            }}
+                            className="btn-primary shadow-lg shadow-indigo-200 bg-slate-900 hover:bg-black border-transparent text-white"
+                        >
+                            <PlusCircle className="w-5 h-5" /> Tạo cuộc thi mới
+                        </button>
+                    )}
+                </div>
+
+                {/* Search and Filter Bar */}
+                <div className="flex gap-3 relative z-10">
+                    <div className="relative flex-1 group">
+                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Search className="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+                        </div>
                         <input
+                            type="text"
+                            className="block w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-full text-sm shadow-sm placeholder-slate-400
+                                     focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                            placeholder="Tìm kiếm bài toán..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            placeholder="Search competitions..."
-                            className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2.5 text-sm focus:border-indigo-400 focus:ring-indigo-400"
+                        />
+                    </div>
+                    
+                    <div className="relative">
+                        <button
+                            ref={filterButtonRef}
+                            onClick={() => setIsFilterOpen(!isFilterOpen)}
+                            className={`px-5 py-3 rounded-full font-semibold flex items-center gap-2 transition-all shadow-sm border text-sm ${
+                                activeFiltersCount > 0 || isFilterOpen
+                                    ? 'bg-slate-900 text-white border-slate-900'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                            <SlidersHorizontal className="w-4 h-4" />
+                            <span className="hidden sm:inline">Bộ lọc</span>
+                            {activeFiltersCount > 0 && (
+                                <span className="ml-1 bg-white/20 text-white text-xs py-0.5 px-1.5 rounded-full">
+                                    {activeFiltersCount}
+                                </span>
+                            )}
+                        </button>
+
+                        {/* Filter Popup - Absolute positioned relative to button */}
+                        <FilterPopup
+                            isOpen={isFilterOpen}
+                            onClose={() => setIsFilterOpen(false)}
+                            allTags={allTags}
+                            selectedTags={selectedFilterTags}
+                            onToggleTag={toggleTag}
+                            selectedDifficulty={difficultyFilter}
+                            onSelectDifficulty={setDifficultyFilter}
+                            onClearAll={() => {
+                                setSelectedFilterTags([]);
+                                setDifficultyFilter('all');
+                            }}
+                            anchorRef={filterButtonRef}
                         />
                     </div>
                 </div>
-
-                {filteredProblems.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-white p-10 text-center text-slate-500">
-                        No competitions found. Adjust filters or create a new one.
-                    </div>
-                ) : (
-                    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                        {filteredProblems.map((problem) => (
-                            <ProblemCard key={problem.id} problem={problem} />
-                        ))}
-                    </div>
-                )}
-
-                {/* Filters Section at Bottom */}
-                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                            <SlidersHorizontal className="w-4 h-4" />
-                            Filters
-                        </div>
-                        <button
-                            onClick={() => { setSelectedFilterTags([]); setDifficultyFilter('all'); }}
-                            className="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100"
-                        >
-                            Clear all
-                        </button>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                        {(['all', 'easy', 'medium', 'hard'] as const).map((level) => (
-                            <button
-                                key={level}
-                                onClick={() => setDifficultyFilter(level)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-                                    difficultyFilter === level
-                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                                }`}
-                            >
-                                {level === 'all' ? 'All difficulties' : level}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="space-y-2">
-                        <div className="text-xs font-semibold uppercase text-slate-500">Tags</div>
-                        <div className="flex flex-wrap gap-2">
-                            {allTags.map((tag) => {
-                                const active = selectedFilterTags.some((t) => t.id === tag.id);
-                                return (
-                                    <button
-                                        key={tag.id}
-                                        onClick={() => toggleTag(tag)}
-                                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold ${
-                                            active
-                                                ? 'bg-slate-900 text-white border-slate-900'
-                                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                                        }`}
-                                    >
-                                        <TagIcon className="w-3 h-3" />
-                                        {tag.name}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
             </div>
+
+            {/* Problem List Grid */}
+            {loading ? (
+                 <div className="py-20 flex justify-center"><LoadingSpinner /></div>
+            ) : filteredProblems.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center">
+                    <div className="mx-auto w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+                        <Search className="w-8 h-8 text-slate-400" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-slate-900 mb-1">Không tìm thấy kết quả</h3>
+                    <p className="text-slate-500 mb-6">Thử thay đổi từ khóa hoặc bộ lọc của bạn.</p>
+                    <button 
+                        onClick={() => { setSearchTerm(''); setSelectedFilterTags([]); setDifficultyFilter('all'); }}
+                        className="text-indigo-600 font-semibold hover:underline"
+                    >
+                        Xóa toàn bộ bộ lọc
+                    </button>
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    {filteredProblems.map((problem) => (
+                        <div
+                            key={problem.id}
+                            onClick={() => handleProblemClick(problem)}
+                            className="group bg-white rounded-2xl border border-slate-200 p-1 hover:shadow-xl hover:border-indigo-200 transition-all duration-300 cursor-pointer flex flex-col sm:flex-row gap-4 overflow-hidden"
+                        >
+                            {/* Thumbnail */}
+                            <div className="sm:w-48 h-32 bg-slate-100 rounded-xl overflow-hidden relative shrink-0">
+                                {problem.coverImageUrl ? (
+                                    <img 
+                                        src={problem.coverImageUrl} 
+                                        alt={problem.name} 
+                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                                    />
+                                ) : (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 bg-slate-50">
+                                        <TagIcon className="w-8 h-8 mb-1 opacity-50" />
+                                        <span className="text-[10px] font-bold uppercase tracking-wider">No Cover</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex-1 py-2 pr-4 pl-2 flex flex-col">
+                                <div className="flex justify-between items-start">
+                                    <h3 className="text-lg font-bold text-slate-900 group-hover:text-indigo-600 transition-colors line-clamp-1 mb-1" title={problem.name}>
+                                        {problem.name}
+                                    </h3>
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border tracking-wide ${difficultyBadge[problem.difficulty]}`}>
+                                        {problem.difficulty}
+                                    </span>
+                                </div>
+                                
+                                <p className="text-sm text-slate-500 line-clamp-2 mb-3 flex-1">
+                                    {problem.summary || toPlainText(problem.content).slice(0, 150)}
+                                </p>
+
+                                <div className="flex items-center justify-between mt-auto pt-2 border-t border-slate-50">
+                                    <div className="flex gap-2">
+                                        {problem.tags.slice(0, 3).map(tagId => {
+                                            const tag = tagMap[tagId];
+                                            return tag ? (
+                                                <span key={tagId} className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full font-medium border border-slate-200">
+                                                    {tag}
+                                                </span>
+                                            ) : null;
+                                        })}
+                                    </div>
+                                    <div className="flex items-center gap-4 text-xs text-slate-400 font-medium">
+                                        <div className="flex items-center gap-1">
+                                            <Users className="w-3.5 h-3.5" />
+                                            <span>{participantCountByProblem.get(problem.id) || 0} tham gia</span>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <Clock className="w-3.5 h-3.5" />
+                                            <span>Ongoing</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };
