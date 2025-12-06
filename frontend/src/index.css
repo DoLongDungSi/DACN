@@ -3,18 +3,55 @@
 @tailwind utilities;
 
 /* Global styles */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: #f8fafc;
   color: #0f172a;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
   min-height: 100vh;
 }
 
-/* Custom scrollbar */
+/* Hide scrollbars globally but keep functionality */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.5);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.7);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
+}
+
+/* Custom scrollbar class for specific containers */
 .scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 #f1f5f9;
@@ -29,7 +66,102 @@ body {
 .scrollbar-thin::-webkit-scrollbar-thumb {
   background-color: #cbd5e1;
   border-radius: 3px;
-  border: 1px solid #f1f5f9;
+}
+
+/* Hide scrollbar completely when needed */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Custom input and form styles */
+.input-style {
+  @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm 
+         focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none
+         transition-colors duration-150;
+}
+
+.input-label {
+  @apply block text-sm font-medium text-slate-700 mb-1.5;
+}
+
+.input-label-file {
+  @apply block text-sm font-medium text-slate-700 mb-2;
+}
+
+.file-input-style {
+  @apply w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4
+         file:rounded-lg file:border-0 file:text-sm file:font-semibold
+         file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100
+         cursor-pointer border border-slate-200 rounded-lg;
+}
+
+.file-status-ok {
+  @apply mt-1 text-xs text-emerald-600;
+}
+
+.file-status-new {
+  @apply mt-1 text-xs text-indigo-600;
+}
+
+.file-status-required {
+  @apply mt-1 text-xs text-amber-600;
+}
+
+/* Textarea styles */
+.content-textarea {
+  @apply w-full rounded-lg border border-slate-300 px-4 py-3 text-sm font-mono
+         focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none
+         transition-colors duration-150 resize-y min-h-[200px];
+}
+
+.content-preview-container {
+  @apply max-h-[500px] overflow-y-auto pr-2;
+}
+
+/* Tag input styles */
+.tag-input-container {
+  @apply flex flex-wrap items-center gap-2 p-2 border border-slate-300 rounded-lg min-h-[44px];
+}
+
+.tag-selected {
+  @apply inline-flex items-center px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-medium;
+}
+
+.tag-remove-button {
+  @apply ml-1.5 text-indigo-600 hover:text-indigo-800 transition-colors;
+}
+
+.tag-search-input {
+  @apply flex-1 min-w-[100px] border-0 focus:ring-0 text-sm p-1 outline-none;
+}
+
+.tag-dropdown {
+  @apply absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-20;
+}
+
+.tag-dropdown-item {
+  @apply w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 transition-colors;
+}
+
+/* Metric checkbox styles */
+.metric-label {
+  @apply flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors;
+}
+
+.metric-checkbox {
+  @apply w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500;
+}
+
+.metric-key {
+  @apply font-medium text-slate-800;
+}
+
+.metric-direction {
+  @apply text-xs text-slate-500;
 }
 
 /* LeetCode-inspired prose for markdown */
@@ -50,4 +182,89 @@ body {
 .prose pre {
   background-color: #1f2937;
   color: #f9fafb;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+}
+.prose pre code {
+  background-color: transparent;
+  padding: 0;
+  font-size: 0.875em;
+}
+
+/* Button styles */
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg
+         hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-white text-slate-700 font-semibold rounded-lg
+         border border-slate-200 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-danger {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-rose-600 text-white font-semibold rounded-lg
+         hover:bg-rose-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+/* Card styles */
+.card {
+  @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+}
+
+.card-header {
+  @apply px-6 py-4 border-b border-slate-200;
+}
+
+.card-body {
+  @apply p-6;
+}
+
+/* Animation utilities */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out;
+}
+
+/* Focus visible styles for accessibility */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* Selection styling */
+::selection {
+  background-color: rgba(99, 102, 241, 0.2);
+  color: #1e1b4b;
+}
+
+/* Loading overlay */
+.loading-overlay {
+  @apply fixed inset-0 bg-white/80 backdrop-blur-sm z-50 flex items-center justify-center;
 }

@@ -18,6 +18,7 @@ export interface User {
     avatarUrl?: string | null; // Allow null for avatar
     profile: UserProfile;
     isBanned: boolean;
+    isPremium?: boolean;
     // passwordHash should NEVER be sent to frontend
 }
 
@@ -81,6 +82,7 @@ export interface Dataset {
     filename: string;
     content?: string; // Content might be stored elsewhere in production
     downloadUrl?: string;
+    sizeBytes?: number | null;
     // Add other metadata like size, rows, columns if needed
 }
 
@@ -90,6 +92,7 @@ export interface Problem {
     name: string;
     difficulty: Difficulty;
     content: string; // Markdown content describing the problem
+    summary?: string | null;
     problemType: ProblemType;
     authorId?: number | null; // Can be null if author deleted
     authorUsername?: string; // Included from backend join
@@ -99,6 +102,7 @@ export interface Problem {
     metrics: number[]; // Array of Metric IDs (for display purposes)
     evaluationScript?: string | null; // The Python script content for evaluation
     groundTruthContent?: string | null; // Content of the ground truth file
+    coverImageUrl?: string | null;
     // Optional: Add fields like participant count, submission count
     hasEvaluationScript?: boolean; // Indicate if script exists (derived in backend)
     hasGroundTruth?: boolean; // Indicate if ground truth exists (derived in backend)
@@ -151,6 +155,39 @@ export interface ConfirmModalState {
     title: string;
     message: string;
     onConfirm: () => void;
+}
+
+export interface Subscription {
+    id: number;
+    plan: string;
+    status: string;
+    startedAt?: string;
+    renewsAt?: string | null;
+    canceledAt?: string | null;
+}
+
+export interface Payment {
+    id: number;
+    subscriptionId?: number | null;
+    provider: string;
+    providerRef?: string | null;
+    status: string;
+    amountCents: number;
+    currency: string;
+    createdAt: string;
+    updatedAt?: string;
+}
+
+export interface Invoice {
+    id: number;
+    subscriptionId?: number | null;
+    paymentId?: number | null;
+    invoiceNumber?: string | null;
+    amountCents: number;
+    currency: string;
+    status: string;
+    issuedAt: string;
+    pdfPath?: string | null;
 }
 
 export interface LeaderboardEntry {

@@ -38,7 +38,7 @@ router.put('/users/:id/role', async (req, res) => {
       `UPDATE users
        SET role = $1
        WHERE id = $2 AND id != $3 -- Ensure owner cannot be targeted
-       RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned`, // Exclude password_hash
+       RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium`, // Exclude password_hash
       [role, targetUserId, OWNER_ID]
     );
 
@@ -70,7 +70,7 @@ router.put('/users/:id/ban', async (req, res) => {
       `UPDATE users
        SET is_banned = NOT is_banned
        WHERE id = $1 AND id != $2 -- Ensure owner cannot be targeted
-       RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned`, // Exclude password_hash
+       RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium`, // Exclude password_hash
       [targetUserId, OWNER_ID]
     );
 

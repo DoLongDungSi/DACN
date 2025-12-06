@@ -3,16 +3,14 @@ const express = require('express');
 const pool = require('../config/db');
 const { authMiddleware, ownerOrCreatorMiddleware } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
+const { DATA_ROOT, ensureDir, resolveFilePath, readFileContent } = require('../utils/storage');
 const multer = require('multer');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
 // Storage root for datasets (train/test/gt) per problem
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../storage');
-if (!fs.existsSync(DATA_ROOT)) {
-    fs.mkdirSync(DATA_ROOT, { recursive: true });
-}
+ensureDir(DATA_ROOT);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
 const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions';
@@ -28,42 +26,18 @@ const parseDatasets = (datasets) => {
     catch (e) { return []; }
 };
 
-const resolveFilePath = (fileRef) => {
-    if (!fileRef) return null;
-    if (path.isAbsolute(fileRef)) return fileRef;
-    return path.join(DATA_ROOT, fileRef);
-};
-
 const loadDatasetFromDisk = (entry) => {
     if (!entry) return null;
-    const candidatePaths = [];
-    if (entry.path) candidatePaths.push(resolveFilePath(entry.path));
-    if (entry.filename) {
-        const sanitizedFilename = path.basename(entry.filename);
-        candidatePaths.push(
-            path.join('/usr/src/test', sanitizedFilename),
-            path.join(__dirname, '../../test', sanitizedFilename),
-            path.join(process.cwd(), 'test', sanitizedFilename),
-        );
+    const content = readFileContent(entry.path, entry.filename);
+    if (!content) {
+        console.warn(`Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
     }
-    for (const candidate of candidatePaths) {
-        if (!candidate) continue;
-        try {
-            if (fs.existsSync(candidate)) {
-                console.log(`Reading dataset file from disk: ${candidate}`);
-                return fs.readFileSync(candidate, 'utf8');
-            }
-        } catch (e) {
-            console.error('Error reading dataset file', candidate, e);
-        }
-    }
-    console.warn(`Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
-    return null;
+    return content;
 };
 
 const ensureProblemDir = (problemId) => {
     const dir = path.join(DATA_ROOT, `problem_${problemId}`);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    ensureDir(dir);
     return dir;
 };
 
@@ -74,7 +48,7 @@ const saveUploadedFile = (problemId, file, split) => {
     const finalName = `${split}-${unique}-${base}`;
     const fullPath = path.join(dir, finalName);
     fs.writeFileSync(fullPath, file.buffer);
-    return { filename: base, path: path.relative(DATA_ROOT, fullPath) };
+    return { filename: base, path: path.relative(DATA_ROOT, fullPath), sizeBytes: file.size || file.buffer?.length || null };
 };
 
 const deleteFileIfExists = (fileRef) => {
@@ -94,10 +68,21 @@ const buildDatasetList = (problemRow) => {
         .filter(entry => entry && entry.split)
         .map(entry => {
             const split = entry.split;
+            let sizeBytes = entry.sizeBytes || null;
+            const resolvedPath = entry.path ? resolveFilePath(entry.path) : null;
+            if (resolvedPath) {
+                try {
+                    const stat = fs.statSync(resolvedPath);
+                    sizeBytes = stat.size;
+                } catch (err) {
+                    console.warn(`Could not stat dataset file ${resolvedPath}:`, err.message || err);
+                }
+            }
             const sanitized = {
                 split,
                 filename: entry.filename || `${split}.csv`,
                 path: entry.path,
+                sizeBytes,
                 download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
             };
             console.log('Dataset entry for problem', problemRow.id, JSON.stringify(sanitized));
@@ -164,7 +149,7 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
   try { parsedData = JSON.parse(problemData); }
   catch (e) { return res.status(400).json({ message: 'Invalid problem data format (must be JSON string).' }); }
 
-  const { name, difficulty, content, problemType, tagIds = [], metricIds = [], existingDatasets = [], evaluationScriptContent } = parsedData;
+  const { name, difficulty, content, summary = '', coverImageUrl = null, problemType, tagIds = [], metricIds = [], existingDatasets = [], evaluationScriptContent } = parsedData;
 
   // Basic Validations
   if (!name || !difficulty || !content || !problemType || !evaluationScriptContent || !evaluationScriptContent.trim() || !Array.isArray(tagIds) || !Array.isArray(metricIds)) {
@@ -182,6 +167,7 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
            split: entry.split,
            filename: entry.filename,
            path: entry.path,
+            sizeBytes: entry.sizeBytes || null,
        };
        return normalized;
    };
@@ -216,13 +202,13 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
       await client.query('BEGIN');
 
       if (isUpdate) {
-          const existingRes = await client.query('SELECT author_id, datasets, ground_truth_content, public_test_content FROM problems WHERE id = $1', [problemId]);
+          const existingRes = await client.query('SELECT author_id, datasets, ground_truth_path, public_test_path FROM problems WHERE id = $1', [problemId]);
           if (existingRes.rows.length === 0) { await client.query('ROLLBACK'); throw new Error('Problem not found.'); }
           if (userRole !== 'owner' && existingRes.rows[0].author_id !== authorId) { await client.query('ROLLBACK'); throw new Error('Not authorized to update this problem.'); }
           existingDbDatasets = parseDatasets(existingRes.rows[0].datasets) || [];
           datasets = existingDbDatasets.map(sanitizeDatasetEntry).filter(Boolean);
-          groundTruthPath = existingRes.rows[0].ground_truth_content || null;
-          publicTestPath = existingRes.rows[0].public_test_content || null;
+          groundTruthPath = existingRes.rows[0].ground_truth_path || null;
+          publicTestPath = existingRes.rows[0].public_test_path || null;
       } else {
           // Pre-reserve an ID so we can place files on disk with stable folder names
           const idRes = await client.query("SELECT nextval('problems_id_seq') as id");
@@ -236,7 +222,7 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
           const existing = datasets.find(d => d.split === split);
           if (existing?.path) deleteFileIfExists(existing.path);
           datasets = datasets.filter(d => d && d.split !== split);
-          datasets.push({ split, filename: savedInfo.filename, path: savedInfo.path });
+          datasets.push({ split, filename: savedInfo.filename, path: savedInfo.path, sizeBytes: savedInfo.sizeBytes || null });
       };
 
       // Write uploaded files to disk now that we know problemId
@@ -271,14 +257,14 @@ const handleProblemSave = async (req, res, isUpdate = false) => {
       const datasetsJson = JSON.stringify(datasets);
       if (isUpdate) {
          console.log(`Updating problem ${problemId}`);
-         const updateQuery = `UPDATE problems SET name=$1, difficulty=$2, content=$3, problem_type=$4, datasets=$5, evaluation_script=$6, ground_truth_content=$7, public_test_content=$8 WHERE id = $9 RETURNING id`;
-         const updateResult = await client.query(updateQuery, [name, difficulty, content, problemType, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath, problemId]);
+         const updateQuery = `UPDATE problems SET name=$1, difficulty=$2, content=$3, summary=$4, cover_image_url=$5, problem_type=$6, datasets=$7, evaluation_script=$8, ground_truth_path=$9, public_test_path=$10 WHERE id = $11 RETURNING id`;
+         const updateResult = await client.query(updateQuery, [name, difficulty, content, summary, coverImageUrl, problemType, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath, problemId]);
           if (updateResult.rowCount === 0) { await client.query('ROLLBACK'); throw new Error('Update failed. Problem not found or no changes.'); }
           savedProblemId = updateResult.rows[0].id;
       } else {
          console.log(`Creating new problem ${savedProblemId}`);
-const insertQuery = `INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`;
-const insertResult = await client.query(insertQuery, [savedProblemId, name, difficulty, content, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthContent, publicTestContent]);
+const insertQuery = `INSERT INTO problems (id, name, difficulty, content, summary, cover_image_url, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`;
+const insertResult = await client.query(insertQuery, [savedProblemId, name, difficulty, content, summary, coverImageUrl, problemType, authorId, datasetsJson, evaluationScriptContent, groundTruthPath, publicTestPath]);
 
          savedProblemId = insertResult.rows[0].id;
       }
@@ -300,12 +286,12 @@ const insertResult = await client.query(insertQuery, [savedProblemId, name, diff
 
       // Fetch final data for response
        const finalProblemRes = await pool.query(
-           `SELECT p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
+           `SELECT p.id, p.name, p.difficulty, p.content, p.summary, p.problem_type, p.author_id, p.created_at,
                    p.evaluation_script,
-                   u.username as author_username, p.datasets,
+                   u.username as author_username, p.datasets, p.cover_image_url,
                    (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-                   (CASE WHEN p.ground_truth_content IS NOT NULL AND p.ground_truth_content != '' THEN true ELSE false END) as has_ground_truth,
-                   (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
+                   (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
+                   (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
                    COALESCE(tags.tag_ids, '{}'::int[]) as tags,
                    COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
                    COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
@@ -460,7 +446,7 @@ router.get('/', async (req, res) => {
     try {
       const result = await pool.query(
          `SELECT
-              p.id, p.name, p.difficulty, p.problem_type, p.author_id, p.created_at,
+              p.id, p.name, p.difficulty, p.problem_type, p.author_id, p.created_at, p.summary, p.cover_image_url,
               u.username as author_username,
               COALESCE(tags.tag_ids, '{}'::int[]) as tags,
               m.key as primary_metric_key
@@ -490,13 +476,13 @@ router.get('/:id', async (req, res) => {
     try {
        const result = await pool.query(
            `SELECT
-               p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
+               p.id, p.name, p.difficulty, p.content, p.summary, p.problem_type, p.author_id, p.created_at,
                p.evaluation_script,
                u.username as author_username,
-               p.datasets,
+               p.datasets, p.cover_image_url,
                (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-               (CASE WHEN p.ground_truth_content IS NOT NULL AND p.ground_truth_content != '' THEN true ELSE false END) as has_ground_truth,
-               (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
+               (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
+               (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
                COALESCE(tags.tag_ids, '{}'::int[]) as tags,
                COALESCE(metrics_agg.metric_ids, '{}'::int[]) as metrics,
                COALESCE(metrics_details.details, '[]'::jsonb) as metrics_details,
@@ -618,7 +604,7 @@ router.get('/:id/datasets/:split', async (req, res) => {
 
     try {
         const problemRes = await pool.query(
-            'SELECT datasets, public_test_content FROM problems WHERE id = $1',
+            'SELECT datasets, public_test_path FROM problems WHERE id = $1',
             [problemId]
         );
         if (problemRes.rows.length === 0) {
@@ -632,8 +618,8 @@ router.get('/:id/datasets/:split', async (req, res) => {
         let filename = entry?.filename || `${split}.csv`;
 
         content = loadDatasetFromDisk(entry || { filename });
-        if (!content && split === 'public_test' && problem.public_test_content) {
-            content = loadDatasetFromDisk({ path: problem.public_test_content, filename });
+        if (!content && split === 'public_test' && problem.public_test_path) {
+            content = loadDatasetFromDisk({ path: problem.public_test_path, filename });
         }
 
         if (!content) {

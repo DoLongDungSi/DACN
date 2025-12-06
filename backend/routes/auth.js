@@ -53,7 +53,7 @@ router.post('/signup', async (req, res) => {
     const newUserQuery = `
       INSERT INTO users (username, email, password_hash, avatar_color, profile)
       VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned
+      RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium
     `;
 
     const result = await pool.query(newUserQuery, [
@@ -110,7 +110,7 @@ router.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, password_hash
+      `SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium, password_hash
        FROM users
        WHERE username = $1 OR email = $1`,
       [credential]
@@ -174,7 +174,7 @@ router.get('/check-session', authMiddleware, async (req, res) => {
   // authMiddleware already verified the token and attached req.userId
   try {
     const result = await pool.query(
-      `SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned
+      `SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium
        FROM users
        WHERE id = $1`,
       [req.userId]

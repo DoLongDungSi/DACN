@@ -4,6 +4,7 @@ const pool = require('../config/db');
 const { authMiddleware } = require('../middleware/auth');
 const { singleUploadMiddleware } = require('../config/multer');
 const { toCamelCase } = require('../utils/helpers');
+const { readFileContent } = require('../utils/storage');
 const axios = require('axios');
 const router = express.Router();
 
@@ -30,10 +31,9 @@ router.post(
         try {
             client = await pool.connect();
 
-            // Fetch problem details: script, ground truth content, AND public test content
-            // MODIFIED: Select public_test_content directly
+            // Fetch problem details: script plus paths for ground truth and public test
             const problemRes = await client.query(
-                `SELECT evaluation_script, ground_truth_content, public_test_content FROM problems WHERE id = $1`,
+                `SELECT evaluation_script, ground_truth_path, public_test_path FROM problems WHERE id = $1`,
                  [problemId]
             );
 
@@ -42,18 +42,18 @@ router.post(
             }
 
             const evaluationScript = problemRes.rows[0].evaluation_script;
-            const groundTruthContent = problemRes.rows[0].ground_truth_content;
-            const publicTestContent = problemRes.rows[0].public_test_content;
+            const groundTruthContent = readFileContent(problemRes.rows[0].ground_truth_path);
+            const publicTestContent = readFileContent(problemRes.rows[0].public_test_path);
 
             // Check if all necessary data is present
             if (!evaluationScript) {
                 return res.status(500).json({ message: 'Evaluation script for this problem is missing.' });
             }
             if (!groundTruthContent) {
-                 return res.status(500).json({ message: 'Ground truth content for this problem is missing.' });
+                 return res.status(500).json({ message: 'Ground truth file for this problem is missing on disk.' });
             }
             if (!publicTestContent) {
-                return res.status(500).json({ message: 'Public test content for this problem is missing.' });
+                return res.status(500).json({ message: 'Public test file for this problem is missing on disk.' });
             }
 
 

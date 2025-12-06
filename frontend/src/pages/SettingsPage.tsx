@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { UserCog, KeyRound, Lock, Bell, Camera, Globe, Github, Linkedin, Twitter } from 'lucide-react';
+import { UserCog, KeyRound, Lock, Bell, Camera, Globe, Github, Linkedin, Twitter, Crown, CreditCard, Receipt, Download } from 'lucide-react';
 import { useAppContext } from '../hooks/useAppContext';
 import type { User, UserProfile, NotificationPreferences, Education, WorkExperience } from '../types'; // Import Education, WorkExperience
 import { UserAvatar } from '../components/Common/UserAvatar';
@@ -15,7 +15,7 @@ export const SettingsPage: React.FC = () => {
         openConfirmModal, closeConfirmModal, setLoading, loading,
         imgSrc, setImgSrc,
         isAvatarModalOpen, setIsAvatarModalOpen, originalFileName, setOriginalFileName,
-        showToast,
+        showToast, subscription, invoices, startPremiumCheckout, downloadInvoicePdf, refreshBilling,
     } = useAppContext();
 
     const [settingsTab, setSettingsTab] = useState("basic-info");
@@ -113,6 +113,7 @@ export const SettingsPage: React.FC = () => {
         { id: "account", label: "Tài khoản", icon: KeyRound },
         { id: "privacy", label: "Riêng tư", icon: Lock },
         { id: "notifications", label: "Thông báo", icon: Bell },
+        { id: "billing", label: "Premium & Billing", icon: CreditCard },
     ];
 
     const notificationRows = [
@@ -244,6 +245,45 @@ export const SettingsPage: React.FC = () => {
                                         {notificationRows.map((row) => ( <tr key={row.key} className="hover:bg-slate-50/50"> <td className="table-cell">{row.label}</td> <td className="table-cell text-center"> <ToggleSwitch checked={profile.notifications?.[row.key]?.email ?? false} onChange={(val) => handleNotifChange(row.key, 'email', val)} /> </td> <td className="table-cell text-center"> <ToggleSwitch checked={profile.notifications?.[row.key]?.site ?? false} onChange={(val) => handleNotifChange(row.key, 'site', val)} /> </td> </tr> ))}
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {settingsTab === "billing" && (
+                        <div className="space-y-6">
+                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Crown className="w-5 h-5 text-amber-500"/>Premium & Billing</h3>
+                            <div className="border border-slate-200 rounded-lg p-4 bg-amber-50">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm text-slate-600">Trạng thái</p>
+                                        <p className="text-lg font-semibold text-slate-800">{subscription?.status || 'chưa kích hoạt'}</p>
+                                    </div>
+                                    <button onClick={() => startPremiumCheckout()} className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold px-3 py-2 rounded-lg transition">
+                                        <Crown className="w-4 h-4"/> Nâng cấp Premium
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-600 mt-2">Premium mở khóa gợi ý AI, invoice PDF và ưu tiên hàng chờ.</p>
+                            </div>
+                            <div className="border border-slate-200 rounded-lg p-4 bg-white">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-2 text-slate-700 font-semibold"><Receipt className="w-4 h-4 text-slate-500"/> Hóa đơn</div>
+                                    <button onClick={() => refreshBilling()} className="text-xs text-indigo-600 hover:text-indigo-800">Làm mới</button>
+                                </div>
+                                {invoices && invoices.length > 0 ? (
+                                    <ul className="space-y-2">
+                                        {invoices.map((inv) => (
+                                            <li key={inv.id} className="flex items-center justify-between text-sm border border-slate-200 rounded-lg px-3 py-2">
+                                                <div>
+                                                    <div className="font-semibold text-slate-800">{inv.invoiceNumber || `INV-${inv.id}`}</div>
+                                                    <div className="text-xs text-slate-500">{(inv.amountCents / 100).toFixed(2)} {inv.currency?.toUpperCase()}</div>
+                                                </div>
+                                                <button onClick={() => downloadInvoicePdf(inv.id)} className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800"><Download className="w-4 h-4"/>Tải</button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : (
+                                    <p className="text-sm text-slate-500">Chưa có hóa đơn.</p>
+                                )}
                             </div>
                         </div>
                     )}

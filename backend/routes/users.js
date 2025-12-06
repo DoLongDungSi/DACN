@@ -24,7 +24,7 @@ router.put('/me', authMiddleware, async (req, res) => {
       UPDATE users
       SET username = $1, email = $2, profile = $3
       WHERE id = $4
-      RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned
+      RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium
     `;
     const result = await pool.query(query, [username, email, JSON.stringify(profile), userId]); // Ensure profile is stringified
 
@@ -102,7 +102,7 @@ router.put('/me/avatar', authMiddleware, async (req, res) => {
       UPDATE users
       SET avatar_url = $1
       WHERE id = $2
-      RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned
+      RETURNING id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium
     `;
     const result = await pool.query(query, [avatarDataUrl, userId]);
 

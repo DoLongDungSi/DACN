@@ -13,7 +13,6 @@ import { ProblemEditorPage } from './pages/ProblemEditorPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ConfirmModal } from './components/Common/ConfirmModal';
 import { LoadingSpinner } from './components/Common/LoadingSpinner';
-import { Sidebar } from './components/Sidebar';
 import { Toast } from './components/Common/Toast';
 
 // Main application component that decides which view/page to render
@@ -36,14 +35,13 @@ const AppContent: React.FC = () => {
 
     // Main authenticated view
     return (
-        <div className="flex min-h-screen bg-slate-50 text-slate-800">
-            <Sidebar />
-            <div className="flex-1 flex flex-col overflow-hidden">
-                <Header />
-                <main className="flex-1 max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 relative overflow-y-auto">
-                     {/* Global Loading Indicator */}
-                     {loading && <LoadingSpinner overlay={true} />}
+        <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col">
+            <Header />
+            <main className="flex-1 relative">
+                {/* Global Loading Indicator */}
+                {loading && <LoadingSpinner overlay={true} />}
 
+                <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
                     <Routes>
                         <Route path="/" element={<ProblemsListPage />} />
                         <Route path="/problems" element={<ProblemsListPage />} />
@@ -56,18 +54,18 @@ const AppContent: React.FC = () => {
                         <Route path="/settings" element={<SettingsPage />} />
                         <Route path="*" element={<Navigate to="/problems" replace />} />
                     </Routes>
-                </main>
-                 <ConfirmModal /> {/* Render the confirmation modal globally */}
+                </div>
+            </main>
+            
+            <ConfirmModal />
 
-                 {/* Render Toast component if there's a message */}
-                 {toastMessage && toastType && (
-                    <Toast
-                        message={toastMessage}
-                        type={toastType}
-                        onClose={clearToast}
-                    />
-                )}
-            </div>
+            {toastMessage && toastType && (
+                <Toast
+                    message={toastMessage}
+                    type={toastType}
+                    onClose={clearToast}
+                />
+            )}
         </div>
     );
 };

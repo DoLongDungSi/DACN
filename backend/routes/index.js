@@ -7,6 +7,7 @@ const problemRoutes = require('./problems');
 const submissionRoutes = require('./submissions');
 const discussionRoutes = require('./discussion');
 const initialDataRoutes = require('./initialData');
+const billingRoutes = require('./billing');
 
 const router = express.Router();
 
@@ -18,6 +19,7 @@ router.use('/problems', problemRoutes); // For /api/problems, /api/problems/:id
 router.use('/submissions', submissionRoutes); // For /api/submissions
 router.use('/discussion', discussionRoutes); // Mount discussion routes under /api/discussion/* (e.g., /api/discussion/posts)
 router.use('/initial-data', initialDataRoutes); // For /api/initial-data
+router.use('/billing', billingRoutes); // For /api/billing/*
 
 // Optional: Add a simple health check or root API endpoint
 router.get('/', (req, res) => {

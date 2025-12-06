@@ -1,5 +1,5 @@
 -- Drop old tables if they exist
-DROP TABLE IF EXISTS votes, discussion_comments, discussion_posts, submissions, problem_metrics, problem_tags, problems, metrics, tags, users CASCADE;
+DROP TABLE IF EXISTS votes, discussion_comments, discussion_posts, submissions, problem_metrics, problem_tags, problems, metrics, tags, invoices, payments, subscriptions, users CASCADE;
 
 -- Users Table
 CREATE TABLE users (
@@ -12,26 +12,29 @@ CREATE TABLE users (
     avatar_color VARCHAR(50),
     avatar_url TEXT,
     profile JSONB,
-    is_banned BOOLEAN NOT NULL DEFAULT FALSE
+    is_banned BOOLEAN NOT NULL DEFAULT FALSE,
+    is_premium BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Tags and Metrics Tables
 CREATE TABLE tags ( id SERIAL PRIMARY KEY, name VARCHAR(50) UNIQUE NOT NULL );
 CREATE TABLE metrics ( id SERIAL PRIMARY KEY, key VARCHAR(50) UNIQUE NOT NULL, direction VARCHAR(10) NOT NULL ); -- direction: 'maximize' or 'minimize'
 
--- Problems Table (MODIFIED: Added public_test_content)
+-- Problems Table (stores dataset paths instead of inline CSV content)
 CREATE TABLE problems (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     difficulty VARCHAR(20) NOT NULL, -- 'easy', 'medium', 'hard'
     content TEXT NOT NULL, -- Markdown content
+    summary TEXT,
     problem_type VARCHAR(50) NOT NULL, -- 'classification', 'regression', 'other'
     author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    datasets JSONB, -- Stores array of {split: 'train'/'public_test', filename: '...'} metadata
+    datasets JSONB, -- Stores array of {split, filename, path, sizeBytes?} metadata
     evaluation_script TEXT, -- Stores the Python evaluation script content
-    ground_truth_content TEXT, -- Stores the content of the ground truth CSV file
-    public_test_content TEXT -- NEW COLUMN: Stores the content of the public test CSV file
+    ground_truth_path TEXT, -- Path to ground truth CSV on disk
+    public_test_path TEXT, -- Path to public test CSV on disk
+    cover_image_url TEXT
 );
 
 -- Junction Table: Problem <-> Tags
@@ -49,7 +52,44 @@ CREATE TABLE problem_metrics (
     PRIMARY KEY (problem_id, metric_id)
 );
 
--- Submissions Table (MODIFIED: status type changed to VARCHAR for more flexibility)
+-- Subscriptions / Payments / Invoices
+CREATE TABLE subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    plan VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'inactive',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    renews_at TIMESTAMPTZ,
+    canceled_at TIMESTAMPTZ
+);
+
+CREATE TABLE payments (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL,
+    provider VARCHAR(30) NOT NULL,
+    provider_ref VARCHAR(120),
+    status VARCHAR(20) NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'usd',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE invoices (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL,
+    payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL,
+    invoice_number VARCHAR(64) UNIQUE,
+    amount_cents INTEGER NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'usd',
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    pdf_path TEXT,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Submissions Table
 CREATE TABLE submissions (
     id SERIAL PRIMARY KEY,
     problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
@@ -98,166 +138,146 @@ CREATE TABLE votes (
 -- INITIAL DATA --
 
 -- Sample User (Owner)
-INSERT INTO users (id, username, email, password_hash, role, avatar_color, profile) VALUES
-(1, 'admin', 'admin@mljudge.com', '$2b$10$WLijFpXO4G5XS9M7olwHnOsi8DQ0ofknVXYQCfSBIYuU21bSOofs6', 'owner', 'bg-red-600', '{"realName": "Admin Viète", "skills": [], "education": [], "workExperience": [], "allowJobContact": true, "showOnLeaderboard": true, "showSubmissionHistory": true, "notifications": {"award": {"site": true, "email": true}, "promotions": {"site": false, "email": false}, "newComments": {"site": true, "email": false}, "announcements": {"site": true, "email": true}, "contestUpdates": {"site": true, "email": true}, "featureAnnouncements": {"site": true, "email": true}}}');
+INSERT INTO users (id, username, email, password_hash, role, avatar_color, profile, is_premium) VALUES
+(1, 'admin', 'admin@mljudge.com', '$2b$10$WLijFpXO4G5XS9M7olwHnOsi8DQ0ofknVXYQCfSBIYuU21bSOofs6', 'owner', 'bg-red-600', '{"realName": "Admin", "skills": [], "education": [], "workExperience": [], "allowJobContact": true, "showOnLeaderboard": true, "showSubmissionHistory": true}', TRUE);
 
 -- Sample Tags
-INSERT INTO tags (id, name) VALUES (1, 'classification'), (2, 'regression'), (3, 'health'), (4, 'real-estate'), (5, 'tabular');
+INSERT INTO tags (id, name) VALUES (1, 'classification'), (2, 'regression'), (3, 'tabular'), (4, 'baseline'), (5, 'getting-started');
 -- Sample Metrics
 INSERT INTO metrics (id, key, direction) VALUES (1, 'accuracy', 'maximize'), (2, 'rmse', 'minimize');
 
--- Sample Problem 1: Classification (Added sample public_test_content)
-INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES
-(1, 'Phân loại Bệnh tiểu đường', 'easy',
-'## Mô tả\n\nDự đoán xem một bệnh nhân có bị tiểu đường hay không dựa trên các chỉ số sức khỏe.\n\n## Dữ liệu\n\n* `train.csv`: Dữ liệu huấn luyện với các features và cột `Outcome` (0 hoặc 1).\n* `test.csv`: Dữ liệu kiểm tra chỉ chứa features.\n\n## Nộp bài\n\nNộp file csv có 2 cột: `id` và `prediction` (0 hoặc 1).\n\n## Đánh giá\n\nSử dụng **Accuracy**.\n',
+-- Sample Problem 1: Classification
+INSERT INTO problems (id, name, difficulty, content, summary, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path, cover_image_url) VALUES
+(1, 'Titanic - Survival Prediction', 'easy',
+'### Overview
+Predict passenger survival on the Titanic. Keep the submission format exactly with columns `PassengerId` and `Survived`.
+
+### Files
+- `titanic_train.csv`
+- `titanic_public_test.csv`
+- Submission must be CSV with `PassengerId,Survived`.
+
+### Metric
+Primary metric: Accuracy.',
+'Start with a clean baseline for the classic Kaggle Titanic challenge.',
 'classification', 1,
-E'[{"split": "train", "filename": "diabetes_train.csv", "content": "id,Feature1,Feature2,Outcome\\n1,10,20,0\\n2,15,25,1\\n3,12,22,0\\n4,18,28,1\\n5,20,30,1\\n"},
-   {"split": "public_test", "filename": "diabetes_test.csv", "content": "id,Feature1,Feature2\\n1,10,20\\n2,15,25\\n3,12,22\\n4,18,28\\n5,20,30\\n"}]',
-'# Script chấm điểm mẫu: Accuracy
-import sys, pandas as pd, traceback
+E''[
+  {"split":"train","filename":"titanic_train.csv","path":"problems/titanic/train.csv"},
+  {"split":"public_test","filename":"titanic_public_test.csv","path":"problems/titanic/public_test.csv"},
+  {"split":"ground_truth","filename":"titanic_ground_truth.csv","path":"problems/titanic/ground_truth.csv"}
+]'',
+$$
+import sys
+import pandas as pd
 from sklearn.metrics import accuracy_score
 
-# Args: submission_path, ground_truth_path, public_test_path, output_path
-# Score: -1 (lỗi format), 0 (lỗi tính điểm), >=0 (điểm thực tế)
-
 def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
-    required_columns = [''id'', ''prediction'']
-    final_score = -1.0 # Mặc định là lỗi format
     try:
-        try: sub_df = pd.read_csv(submission_path)
-        except Exception as e: raise ValueError(f"Lỗi đọc submission: {e}")
-        try: gt_df = pd.read_csv(ground_truth_path)
-        except Exception as e: raise RuntimeError(f"Lỗi đọc ground truth: {e}")
-        try: test_df = pd.read_csv(public_test_path)
-        except Exception as e: raise ValueError(f"Lỗi đọc public test: {e}")
-        print("Kiểm tra định dạng...")
-        missing_cols = [col for col in required_columns if col not in sub_df.columns]
-        if missing_cols: raise ValueError(f"Thiếu cột: {missing_cols}")
-        if len(sub_df) != len(test_df): raise ValueError(f"Sai số dòng: {len(sub_df)} vs {len(test_df)}")
-        if ''id'' in test_df.columns:
-            if not sub_df[''id''].sort_values().reset_index(drop=True).equals(test_df[''id''].sort_values().reset_index(drop=True)): raise ValueError("Sai lệch cột ''id''")
-        if sub_df.isnull().values.any(): raise ValueError("Có giá trị thiếu (NaN/Null)")
-        if not pd.api.types.is_numeric_dtype(sub_df[''prediction'']): raise ValueError("Cột ''prediction'' phải là số")
-        # Thêm kiểm tra giá trị prediction cho classification (0 hoặc 1)
-        if not sub_df[''prediction''].isin([0, 1]).all(): raise ValueError("Cột ''prediction'' chỉ được chứa 0 hoặc 1")
-        print("--- Định dạng OK ---")
-        print("Tính điểm...")
-        final_score = 0.0 # Mặc định 0 nếu lỗi tính điểm
-        if ''id'' not in gt_df.columns or ''Outcome'' not in gt_df.columns: raise ValueError("Ground truth thiếu cột ''id'' hoặc ''Outcome''")
-        merged_df = pd.merge(sub_df[[''id'', ''prediction'']], gt_df[[''id'', ''Outcome'']], on=''id'', how=''inner'')
-        if len(merged_df) != len(sub_df): raise RuntimeError("Lỗi merge khi tính điểm")
-        calculated_score = accuracy_score(merged_df[''Outcome''], merged_df[''prediction''].round().astype(int))
-        final_score = calculated_score
-        print(f"Accuracy: {final_score}")
-        print("--- Tính điểm OK ---")
-    except ValueError as format_error: # Lỗi định dạng
-        print(f"Lỗi Định dạng:\n{format_error}", file=sys.stderr); final_score = -1.0
-        try:
-            with open(output_path, ''w'') as f: f.write(str(final_score))
-        except Exception as write_e: print(f"Lỗi ghi điểm format (-1): {write_e}", file=sys.stderr)
+        sub_df = pd.read_csv(submission_path)
+        gt_df = pd.read_csv(ground_truth_path)
+        test_df = pd.read_csv(public_test_path)
+    except Exception as exc:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("-1.0")
         sys.exit(1)
-    except Exception as calc_error: # Lỗi tính toán/khác
-        print(f"Lỗi Tính toán/Khác:\n{traceback.format_exc()}", file=sys.stderr); final_score = 0.0
-        try:
-            with open(output_path, ''w'') as f: f.write(str(final_score))
-        except Exception as write_e: print(f"Lỗi ghi điểm tính toán (0): {write_e}", file=sys.stderr)
-        sys.exit(1)
-    try:
-        with open(output_path, ''w'') as f: f.write(str(final_score))
-        print(f"Ghi điểm cuối cùng: {final_score}")
-    except Exception as e:
-        print(f"Lỗi ghi điểm cuối cùng ({final_score}): {e}", file=sys.stderr); sys.exit(1)
-if __name__ == "__main__":
-    if len(sys.argv) != 5: print("Usage: python <script> <sub.csv> <gt.csv> <test.csv> <out.txt>", file=sys.stderr); sys.exit(1)
-    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]); print("Chấm điểm hoàn tất.")
-',
-'id,Outcome\n1,0\n2,1\n3,0\n4,1\n5,1\n', -- Sample Ground Truth Content
-'id,Feature1,Feature2\n1,10,20\n2,15,25\n3,12,22\n4,18,28\n5,20,30\n' -- Sample Public Test Content
-);
 
--- Sample Problem 2: Regression (Added sample public_test_content)
-INSERT INTO problems (id, name, difficulty, content, problem_type, author_id, datasets, evaluation_script, ground_truth_content, public_test_content) VALUES
-(2, 'Dự đoán giá nhà', 'medium',
-'## Mô tả\n\nDự đoán giá nhà dựa trên các đặc điểm của căn nhà.\n\n## Dữ liệu\n\n* `train.csv`: Dữ liệu huấn luyện với features và giá nhà (`SalePrice`).\n* `test.csv`: Dữ liệu kiểm tra chỉ chứa features.\n\n## Nộp bài\n\nNộp file csv có 2 cột: `id` và `prediction` (giá dự đoán).\n\n## Đánh giá\n\nSử dụng **Root Mean Squared Error (RMSE)**.\n',
+    required_cols = {"PassengerId", "Survived"}
+    if not required_cols.issubset(sub_df.columns) or len(sub_df) != len(test_df):
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("-1.0")
+        sys.exit(1)
+
+    merged = pd.merge(sub_df, gt_df, on="PassengerId", how="inner")
+    if len(merged) != len(sub_df):
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("0.0")
+        sys.exit(1)
+
+    score = accuracy_score(merged["Survived_y"], merged["Survived_x"].round().astype(int))
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(str(float(score)))
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5:
+        sys.exit(1)
+    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+$$,
+'problems/titanic/ground_truth.csv',
+'problems/titanic/public_test.csv',
+'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1200&q=80&auto=format&fit=crop');
+
+-- Sample Problem 2: Regression
+INSERT INTO problems (id, name, difficulty, content, summary, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path, cover_image_url) VALUES
+(2, 'House Prices - Baseline Regression', 'medium',
+'### Overview
+Predict house sale prices. Submission must contain `Id,SalePrice`.
+
+### Files
+- `housing_train.csv`
+- `housing_public_test.csv`
+
+### Metric
+Primary metric: RMSE (lower is better).',
+'Simple baseline for tabular regression.',
 'regression', 1,
-E'[{"split": "train", "filename": "house_train.csv", "content": "id,LotArea,YearBuilt,SalePrice\\n1001,8450,2003,150000\\n1002,9600,1976,220000\\n1003,11250,2001,185000\\n"},
-   {"split": "public_test", "filename": "house_test.csv", "content": "id,LotArea,YearBuilt\\n1001,8450,2003\\n1002,9600,1976\\n1003,11250,2001\\n"}]',
-'# Script chấm điểm mẫu: RMSE
-import sys, pandas as pd, traceback
+E''[
+  {"split":"train","filename":"housing_train.csv","path":"problems/housing/train.csv"},
+  {"split":"public_test","filename":"housing_public_test.csv","path":"problems/housing/public_test.csv"},
+  {"split":"ground_truth","filename":"housing_ground_truth.csv","path":"problems/housing/ground_truth.csv"}
+]'',
+$$
+import sys
+import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_squared_error
 
-# Args: submission_path, ground_truth_path, public_test_path, output_path
-# Score: -1 (lỗi format), 0 (lỗi tính điểm), >=0 (điểm thực tế)
-
 def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
-    required_columns = [''id'', ''prediction'']
-    final_score = -1.0 # Mặc định là lỗi format
     try:
-        try: sub_df = pd.read_csv(submission_path)
-        except Exception as e: raise ValueError(f"Lỗi đọc submission: {e}")
-        try: gt_df = pd.read_csv(ground_truth_path)
-        except Exception as e: raise RuntimeError(f"Lỗi đọc ground truth: {e}")
-        try: test_df = pd.read_csv(public_test_path)
-        except Exception as e: raise ValueError(f"Lỗi đọc public test: {e}")
-        print("Kiểm tra định dạng...")
-        missing_cols = [col for col in required_columns if col not in sub_df.columns]
-        if missing_cols: raise ValueError(f"Thiếu cột: {missing_cols}")
-        if len(sub_df) != len(test_df): raise ValueError(f"Sai số dòng: {len(sub_df)} vs {len(test_df)}")
-        if ''id'' in test_df.columns:
-            if not sub_df[''id''].sort_values().reset_index(drop=True).equals(test_df[''id''].sort_values().reset_index(drop=True)): raise ValueError("Sai lệch cột ''id''")
-        if sub_df.isnull().values.any(): raise ValueError("Có giá trị thiếu (NaN/Null)")
-        if not pd.api.types.is_numeric_dtype(sub_df[''prediction'']): raise ValueError("Cột ''prediction'' phải là số")
-        # Kiểm tra giá trị prediction cho regression (không âm)
-        if (sub_df[''prediction''] < 0).any(): raise ValueError("Cột ''prediction'' không được chứa giá trị âm")
-        print("--- Định dạng OK ---")
-        print("Tính điểm...")
-        final_score = 0.0 # Mặc định 0 nếu lỗi tính điểm
-        if ''id'' not in gt_df.columns or ''SalePrice'' not in gt_df.columns: raise ValueError("Ground truth thiếu cột ''id'' hoặc ''SalePrice''")
-        merged_df = pd.merge(sub_df[[''id'', ''prediction'']], gt_df[[''id'', ''SalePrice'']], on=''id'', how=''inner'')
-        if len(merged_df) != len(sub_df): raise RuntimeError("Lỗi merge khi tính điểm")
-        # Tính RMSE
-        calculated_score = mean_squared_error(merged_df[''SalePrice''], merged_df[''prediction''], squared=False)
-        final_score = calculated_score
-        print(f"RMSE: {final_score}")
-        print("--- Tính điểm OK ---")
-    except ValueError as format_error: # Lỗi định dạng
-        print(f"Lỗi Định dạng:\n{format_error}", file=sys.stderr); final_score = -1.0
-        try:
-            with open(output_path, ''w'') as f: f.write(str(final_score))
-        except Exception as write_e: print(f"Lỗi ghi điểm format (-1): {write_e}", file=sys.stderr)
+        sub_df = pd.read_csv(submission_path)
+        gt_df = pd.read_csv(ground_truth_path)
+        test_df = pd.read_csv(public_test_path)
+    except Exception:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("-1.0")
         sys.exit(1)
-    except Exception as calc_error: # Lỗi tính toán/khác
-        print(f"Lỗi Tính toán/Khác:\n{traceback.format_exc()}", file=sys.stderr); final_score = 0.0
-        try:
-            with open(output_path, ''w'') as f: f.write(str(final_score))
-        except Exception as write_e: print(f"Lỗi ghi điểm tính toán (0): {write_e}", file=sys.stderr)
+
+    required_cols = {"Id", "SalePrice"}
+    if not required_cols.issubset(sub_df.columns) or len(sub_df) != len(test_df):
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("-1.0")
         sys.exit(1)
-    try:
-        with open(output_path, ''w'') as f: f.write(str(final_score))
-        print(f"Ghi điểm cuối cùng: {final_score}")
-    except Exception as e:
-        print(f"Lỗi ghi điểm cuối cùng ({final_score}): {e}", file=sys.stderr); sys.exit(1)
+
+    merged = pd.merge(sub_df, gt_df, on="Id", how="inner")
+    if len(merged) != len(sub_df):
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("0.0")
+        sys.exit(1)
+
+    rmse = mean_squared_error(merged["SalePrice_y"], merged["SalePrice_x"], squared=False)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(str(float(rmse)))
+
 if __name__ == "__main__":
-    if len(sys.argv) != 5: print("Usage: python <script> <sub.csv> <gt.csv> <test.csv> <out.txt>", file=sys.stderr); sys.exit(1)
-    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]); print("Chấm điểm hoàn tất.")
-',
-'id,SalePrice\n1001,150000\n1002,220000\n1003,185000\n', -- Sample Ground Truth Content
-'id,LotArea,YearBuilt\n1001,8450,2003\n1002,9600,1976\n1003,11250,2001\n' -- Sample Public Test Content
-);
+    if len(sys.argv) != 5:
+        sys.exit(1)
+    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+$$,
+'problems/housing/ground_truth.csv',
+'problems/housing/public_test.csv',
+'https://images.unsplash.com/photo-1505691938895-1758d7feb511?w=1200&q=80&auto=format&fit=crop');
 
 -- Link Problems to Tags/Metrics
-INSERT INTO problem_tags (problem_id, tag_id) VALUES (1, 1), (1, 3), (1, 5), (2, 2), (2, 4), (2, 5);
+INSERT INTO problem_tags (problem_id, tag_id) VALUES (1, 1), (1, 3), (1, 5), (2, 2), (2, 3), (2, 4);
 INSERT INTO problem_metrics (problem_id, metric_id, is_primary) VALUES (1, 1, TRUE), (2, 2, TRUE);
 
 -- Sample Discussion
 INSERT INTO discussion_posts (id, problem_id, user_id, title, content) VALUES
-(1, 1, 1, 'Cách tiếp cận ban đầu: Logistic Regression', 'Tôi đã thử dùng Logistic Regression đơn giản và đạt accuracy khoảng 0.75. Mọi người có cao kiến gì không?'),
-(2, 2, 1, 'Feature Engineering cho Giá nhà?', 'Tôi đang phân vân nên thêm các feature nào để cải thiện mô hình RMSE...');
+(1, 1, 1, 'Baseline model for Titanic', 'Try a simple logistic regression with Cabin deck simplified to first letter.'),
+(2, 2, 1, 'Feature ideas for price', 'Log-transform SalePrice and add LotArea bins for a quick RMSE win.');
 
 INSERT INTO discussion_comments (id, post_id, parent_id, user_id, content) VALUES
-(1, 1, NULL, 1, 'Thử thêm feature scaling xem sao bạn.'),
-(2, 2, NULL, 1, 'Polynomial features có thể hữu ích đó.');
+(1, 1, NULL, 1, 'Standardize numeric columns and you can beat the baseline quickly.'),
+(2, 2, NULL, 1, 'Remember to keep Id ordering identical to public test.');
 
 -- Update sequences to avoid ID conflicts
 SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE((SELECT MAX(id) FROM users), 1));
@@ -268,3 +288,6 @@ SELECT setval(pg_get_serial_sequence('submissions', 'id'), COALESCE((SELECT MAX(
 SELECT setval(pg_get_serial_sequence('discussion_posts', 'id'), COALESCE((SELECT MAX(id) FROM discussion_posts), 1));
 SELECT setval(pg_get_serial_sequence('discussion_comments', 'id'), COALESCE((SELECT MAX(id) FROM discussion_comments), 1));
 SELECT setval(pg_get_serial_sequence('votes', 'id'), COALESCE((SELECT MAX(id) FROM votes), 1));
+SELECT setval(pg_get_serial_sequence('subscriptions', 'id'), COALESCE((SELECT MAX(id) FROM subscriptions), 1));
+SELECT setval(pg_get_serial_sequence('payments', 'id'), COALESCE((SELECT MAX(id) FROM payments), 1));
+SELECT setval(pg_get_serial_sequence('invoices', 'id'), COALESCE((SELECT MAX(id) FROM invoices), 1));

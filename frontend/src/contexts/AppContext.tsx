@@ -1,8 +1,8 @@
-import React, { createContext, useState, useEffect, useCallback, useMemo } from 'react';
+﻿import React, { createContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import type {
     User, Problem, Tag, Metric, Submission, DiscussionPost, DiscussionComment,
-    Page, AuthMode, CurrentView, ConfirmModalState, LeaderboardEntry, Dataset, Role, Direction, UserProfile, NotificationPreferences, Education, WorkExperience
+    Page, AuthMode, CurrentView, ConfirmModalState, LeaderboardEntry, Dataset, Role, Direction, UserProfile, NotificationPreferences, Education, WorkExperience, Subscription, Payment, Invoice
 } from '../types';
 import { API_BASE_URL, OWNER_ID } from '../api';
 import { getCroppedImg } from '../utils';
@@ -44,7 +44,7 @@ interface AppContextType {
     originalFileName: string; // For avatar crop filename
     problemHint: string | null;
     isGeneratingHint: boolean;
-    leftPanelTab: 'description' | 'discussion' | 'datasets';
+    leftPanelTab: 'overview' | 'data' | 'discussion' | 'leaderboard' | 'my-submissions';
     rightPanelTab: 'leaderboard' | 'submissions';
     viewingPost: DiscussionPost | null;
     showNewPostModal: boolean;
@@ -55,6 +55,9 @@ interface AppContextType {
     editingItemId: number | null; // ID of post/comment being edited
     editingItemType: 'post' | 'comment' | null; // Type of item being edited
     votingKey: string | null; // Current vote in-flight (prevents spam)
+    subscription: Subscription | null;
+    invoices: Invoice[];
+    payments: Payment[];
 
 
     // Setters
@@ -81,13 +84,16 @@ interface AppContextType {
     setOriginalFileName: React.Dispatch<React.SetStateAction<string>>;
     setProblemHint: React.Dispatch<React.SetStateAction<string | null>>;
     setIsGeneratingHint: React.Dispatch<React.SetStateAction<boolean>>;
-    setLeftPanelTab: React.Dispatch<React.SetStateAction<'description' | 'discussion' | 'datasets'>>;
+    setLeftPanelTab: React.Dispatch<React.SetStateAction<'overview' | 'data' | 'discussion' | 'leaderboard' | 'my-submissions'>>;
     setRightPanelTab: React.Dispatch<React.SetStateAction<'leaderboard' | 'submissions'>>;
     setViewingPost: React.Dispatch<React.SetStateAction<DiscussionPost | null>>;
     setShowNewPostModal: React.Dispatch<React.SetStateAction<boolean>>;
     setReplyingTo: React.Dispatch<React.SetStateAction<number | null>>;
     setAdminSubPage: React.Dispatch<React.SetStateAction<'users' | 'tags-metrics'>>;
     setVotingKey: React.Dispatch<React.SetStateAction<string | null>>;
+    setSubscription: React.Dispatch<React.SetStateAction<Subscription | null>>;
+    setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
+    setPayments: React.Dispatch<React.SetStateAction<Payment[]>>;
     showToast: (message: string, type: 'success' | 'error' | 'info') => void;
     clearToast: () => void;
     setEditingItemId: React.Dispatch<React.SetStateAction<number | null>>;
@@ -122,6 +128,9 @@ interface AppContextType {
     handleCommentSubmit: (postId: number, content: string, parentId: number | null) => Promise<void>;
     handleVote: (targetType: 'posts' | 'comments', targetId: number, voteType: 'up' | 'down') => Promise<void>;
     handleGetHint: () => Promise<void>;
+    refreshBilling: () => Promise<void>;
+    startPremiumCheckout: (plan?: string) => Promise<void>;
+    downloadInvoicePdf: (invoiceId: number) => Promise<void>;
     downloadDataset: (content: string | undefined, filename: string) => void;
     openConfirmModal: (title: string, message: string, onConfirm: () => void) => void;
     closeConfirmModal: () => void;
@@ -167,7 +176,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [originalFileName, setOriginalFileName] = useState('avatar.png');
     const [problemHint, setProblemHint] = useState<string | null>(null);
     const [isGeneratingHint, setIsGeneratingHint] = useState(false);
-    const [leftPanelTab, setLeftPanelTab] = useState<'description' | 'discussion' | 'datasets'>('description');
+    const [leftPanelTab, setLeftPanelTab] = useState<'overview' | 'data' | 'discussion' | 'leaderboard' | 'my-submissions'>('overview');
     const [rightPanelTab, setRightPanelTab] = useState<'leaderboard' | 'submissions'>('leaderboard');
     const [viewingPost, setViewingPost] = useState<DiscussionPost | null>(null);
     const [showNewPostModal, setShowNewPostModal] = useState(false);
@@ -178,6 +187,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [editingItemId, setEditingItemId] = useState<number | null>(null);
     const [editingItemType, setEditingItemType] = useState<'post' | 'comment' | null>(null);
     const [votingKey, setVotingKey] = useState<string | null>(null);
+    const [subscription, setSubscription] = useState<Subscription | null>(null);
+    const [invoices, setInvoices] = useState<Invoice[]>([]);
+    const [payments, setPayments] = useState<Payment[]>([]);
 
 
      // --- Toast Functions ---
@@ -209,7 +221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else if (selectedProblem) {
             setSelectedProblem(null);
             setViewingPost(null);
-            setLeftPanelTab('description');
+            setLeftPanelTab('overview');
             setRightPanelTab('leaderboard');
         }
 
@@ -246,7 +258,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const resetNonDetailState = () => {
             setViewingPost(null);
-            setLeftPanelTab('description');
+            setLeftPanelTab('overview');
             setRightPanelTab('leaderboard');
         };
 
@@ -326,21 +338,127 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // --- API HELPER ---
     const api = useMemo(() => {
-        const request = async (endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: any) => {
+        const request = async (endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: any, options?: { silent?: boolean }) => {
             const url = `${API_BASE_URL}${endpoint}`;
-            const options: RequestInit = { method, headers: {}, credentials: 'include' };
-            if (body) { if (body instanceof FormData) { options.body = body; } else { (options.headers as Record<string, string>)['Content-Type'] = 'application/json'; options.body = JSON.stringify(body); } }
-            try { console.log(`API Request: ${method} ${url}`, body instanceof FormData ? '[FormData]' : body); const response = await fetch(url, options); console.log(`API Response Status: ${response.status} for ${method} ${url}`); if (response.status === 204) return null; let data; const contentType = response.headers.get("content-type"); if (contentType && contentType.indexOf("application/json") !== -1) { data = await response.json(); console.log(`API Response Data (JSON):`, data); } else { const textData = await response.text(); console.log(`API Response Data (Text):`, textData); if (!response.ok) throw new Error(textData || `API Error: ${response.status} ${response.statusText}`); return { message: textData }; } if (!response.ok) { throw new Error(data.message || `API Error: ${response.status} ${response.statusText}`); } return data;
-            } catch (err: any) { console.error(`API Error on ${method} ${url}:`, err); let errorMessage = 'Có lỗi không mong muốn xảy ra.'; if (err.message) { errorMessage = err.message; } if (toastMessage !== errorMessage) { showToast(errorMessage, 'error'); } throw err; }
+            const fetchOptions: RequestInit = { method, headers: {}, credentials: 'include' };
+            if (body) {
+                if (body instanceof FormData) {
+                    fetchOptions.body = body;
+                } else {
+                    (fetchOptions.headers as Record<string, string>)['Content-Type'] = 'application/json';
+                    fetchOptions.body = JSON.stringify(body);
+                }
+            }
+            try {
+                console.log(`API Request: ${method} ${url}`, body instanceof FormData ? '[FormData]' : body);
+                const response = await fetch(url, fetchOptions);
+                console.log(`API Response Status: ${response.status} for ${method} ${url}`);
+                
+                if (response.status === 204) return null;
+                
+                let data;
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.indexOf("application/json") !== -1) {
+                    data = await response.json();
+                    console.log(`API Response Data (JSON):`, data);
+                } else {
+                    const textData = await response.text();
+                    console.log(`API Response Data (Text):`, textData);
+                    if (!response.ok) throw new Error(textData || `API Error: ${response.status} ${response.statusText}`);
+                    return { message: textData };
+                }
+                
+                if (!response.ok) {
+                    throw new Error(data.message || `API Error: ${response.status} ${response.statusText}`);
+                }
+                return data;
+            } catch (err: any) {
+                console.error(`API Error on ${method} ${url}:`, err);
+                // Only show toast if not silent mode
+                if (!options?.silent) {
+                    let errorMessage = 'Có lỗi không mong muốn xảy ra.';
+                    if (err.message) { errorMessage = err.message; }
+                    showToast(errorMessage, 'error');
+                }
+                throw err;
+            }
         };
-        return { get: (ep: string) => request(ep, 'GET'), post: (ep: string, b?: any) => request(ep, 'POST', b), put: (ep: string, b?: any) => request(ep, 'PUT', b), delete: (ep: string) => request(ep, 'DELETE'), };
-    }, [showToast, toastMessage]);
+        return {
+            get: (ep: string, opts?: { silent?: boolean }) => request(ep, 'GET', undefined, opts),
+            post: (ep: string, b?: any, opts?: { silent?: boolean }) => request(ep, 'POST', b, opts),
+            put: (ep: string, b?: any, opts?: { silent?: boolean }) => request(ep, 'PUT', b, opts),
+            delete: (ep: string, opts?: { silent?: boolean }) => request(ep, 'DELETE', undefined, opts),
+        };
+    }, [showToast]);
 
     // --- ASYNC ACTION HANDLERS ---
      const fetchAllData = useCallback(async () => {
         try { const data = await api.get('/initial-data'); setUsers(data.users || []); setProblems(data.problems || []); setAllTags(data.tags || []); setAllMetrics(data.metrics || []); setSubmissions(data.submissions || []); setPosts(data.posts || []); setComments(data.comments || []); console.log("Fetched initial data:", data);
         } catch (e) { console.error("Failed to fetch initial data:", e); setUsers([]); setProblems([]); setAllTags([]); setAllMetrics([]); setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({}); }
     }, [api]);
+
+    const refreshBilling = useCallback(async () => {
+        if (!currentUser) {
+            setSubscription(null);
+            setInvoices([]);
+            setPayments([]);
+            return;
+        }
+        try {
+            const data = await api.get('/billing/me');
+            setSubscription(data.subscription || null);
+            setInvoices(data.invoices || []);
+            setPayments(data.payments || []);
+        } catch (err) {
+            console.error('Failed to load billing info', err);
+            setSubscription(null);
+            setInvoices([]);
+            setPayments([]);
+        }
+    }, [api, currentUser]);
+
+    const startPremiumCheckout = useCallback(async (plan: string = 'premium-monthly') => {
+        if (!currentUser) {
+            showToast("Đăng nhập để nâng cấp Premium và mở khoá gợi ý AI.", "info");
+            return;
+        }
+        setLoading(true);
+        try {
+            const data = await api.post('/billing/checkout', { plan, paymentMethod: 'dashboard-card' });
+            setCurrentUser(prev => prev ? { ...prev, isPremium: true } : prev);
+            await refreshBilling();
+            if (data?.downloadUrl) {
+                window.open(data.downloadUrl, '_blank');
+            }
+            showToast("Đã kích hoạt Premium.", "success");
+        } catch (err: any) {
+            showToast(err?.message || "Không thể xử lý thanh toán.", "error");
+        } finally {
+            setLoading(false);
+        }
+    }, [api, currentUser, refreshBilling, showToast, setLoading, setCurrentUser]);
+
+    const downloadInvoicePdf = useCallback(async (invoiceId: number) => {
+        if (!invoiceId) return;
+        try {
+            const resp = await fetch(`${API_BASE_URL}/billing/invoices/${invoiceId}/pdf`, { credentials: 'include' });
+            if (!resp.ok) {
+                const message = await resp.text();
+                throw new Error(message || 'Không thể tải hóa đơn.');
+            }
+            const blob = await resp.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `invoice-${invoiceId}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+        } catch (err: any) {
+            showToast(err?.message || "Không thể tải hóa đơn.", "error");
+        }
+    }, [showToast]);
 
 
     // --- Leaderboard Calculation Effect ---
@@ -398,37 +516,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, [submissions, problems, allMetrics, loading, showToast]);
 
     // --- Auth Handlers ---
-     const handleSignup = useCallback(async (username: string, email: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/signup', { username, email, password }); setCurrentUser(data.user); await fetchAllData(); setCurrentView('main'); navigate('problems', null, true); showToast(`Chào mừng ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, showToast, setLoading, setCurrentUser, setCurrentView, navigate]);
-     const handleLogin = useCallback(async (credential: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/login', { credential, password }); setCurrentUser(data.user); await fetchAllData(); setCurrentView('main'); navigate('problems', null, true); showToast(`Chào mừng trở lại, ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, showToast, setLoading, setCurrentUser, setCurrentView, navigate]);
-     const handleLogout = useCallback(async () => { setLoading(true); try { await api.post('/auth/logout', {}); setCurrentUser(null); setUsers([]); setProblems([]); setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({}); setSelectedProblem(null); setViewingUserId(null); setCurrentView('auth'); setError(''); showToast("Đã đăng xuất.", 'info'); routerNavigate('/problems', { replace: true }); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, showToast, setLoading, setCurrentUser, setUsers, setProblems, setSubmissions, setPosts, setComments, setLeaderboardData, setSelectedProblem, setViewingUserId, setCurrentView, setError, routerNavigate]);
+     const handleSignup = useCallback(async (username: string, email: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/signup', { username, email, password }); setCurrentUser(data.user); await fetchAllData(); await refreshBilling(); setCurrentView('main'); navigate('problems', null, true); showToast(`Chào mừng ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, refreshBilling, showToast, setLoading, setCurrentUser, setCurrentView, navigate]);
+     const handleLogin = useCallback(async (credential: string, password: string) => { setLoading(true); try { const data = await api.post('/auth/login', { credential, password }); setCurrentUser(data.user); await fetchAllData(); await refreshBilling(); setCurrentView('main'); navigate('problems', null, true); showToast(`Chào mừng trở lại, ${data.user.username}!`, 'success'); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, fetchAllData, refreshBilling, showToast, setLoading, setCurrentUser, setCurrentView, navigate]);
+     const handleLogout = useCallback(async () => { setLoading(true); try { await api.post('/auth/logout', {}); setCurrentUser(null); setUsers([]); setProblems([]); setSubmissions([]); setPosts([]); setComments([]); setLeaderboardData({}); setSelectedProblem(null); setViewingUserId(null); setCurrentView('auth'); setError(''); setSubscription(null); setInvoices([]); setPayments([]); showToast('Đã đăng xuất.', 'info'); routerNavigate('/problems', { replace: true }); } catch (err) { /* API helper shows toast */ } finally { setLoading(false); } }, [api, showToast, setLoading, setCurrentUser, setUsers, setProblems, setSubmissions, setPosts, setComments, setLeaderboardData, setSelectedProblem, setViewingUserId, setCurrentView, setError, routerNavigate]);
 
      // --- Initial Session Check & Data Load ---
-    useEffect(() => {
-        const initializeApp = async () => {
-            console.log("Initializing App...");
-            setLoading(true);
-            try {
-                console.log("Checking session...");
-                const data = await api.get('/auth/check-session');
-                console.log("Session check successful, user:", data.user?.username);
-                setCurrentUser(data.user);
-            } catch (e) {
-                console.log("No active session or error checking session. Continuing as guest.");
-                setCurrentUser(null);
-            }
-            try {
-                console.log("Fetching all data...");
-                await fetchAllData();
-                console.log("Data fetch complete.");
-            } catch (err) {
-                console.error("Failed to fetch initial data:", err);
-            }
-            setCurrentView('main');
-            console.log("Initialization complete. Setting loading to false.");
-            setLoading(false);
-        };
-        initializeApp();
-    }, [api, fetchAllData]);
+     // Initial load: run exactly once to avoid repeated calls
+     useEffect(() => {
+         const initializeApp = async () => {
+             console.log("Initializing App...");
+             setLoading(true);
+             let hasSession = false;
+             try {
+                 console.log("Checking session...");
+                 // Use silent option to avoid showing "Not authenticated" error toast
+                 const data = await api.get('/auth/check-session', { silent: true });
+                 console.log("Session check successful, user:", data.user?.username);
+                 setCurrentUser(data.user);
+                 hasSession = true;
+                 if (data.user) { await refreshBilling(); }
+             } catch (e) {
+                 console.log("No active session or error checking session. Continuing as guest.");
+                 setCurrentUser(null);
+             }
+             try {
+                 console.log("Fetching all data...");
+                 await fetchAllData();
+                 console.log("Data fetch complete.");
+             } catch (err) {
+                 console.error("Failed to fetch initial data:", err);
+             }
+             setCurrentView(hasSession ? 'main' : 'auth');
+             console.log("Initialization complete. Setting loading to false.");
+             setLoading(false);
+         };
+         initializeApp();
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
 
     // --- Navigation Function ---
 
@@ -657,7 +781,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } finally {
             setIsGeneratingHint(false);
         }
-    }, [selectedProblem, currentUser, api, showToast]);
+    }, [selectedProblem, currentUser, subscription, api, showToast]);
 
     // --- Dataset Download ---
     const downloadDataset = useCallback((content: string | undefined, filename: string) => { if (!content) { showToast(`Nội dung cho file "${filename}" không có sẵn để tải về.`, "error"); return; } try { const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.setAttribute('download', filename); document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); } catch (e) { console.error("Download error:", e); showToast("Lỗi tải dataset.", "error"); } }, [showToast]);
@@ -679,19 +803,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         problemHint, setProblemHint, isGeneratingHint, setIsGeneratingHint, leftPanelTab, setLeftPanelTab, rightPanelTab, setRightPanelTab,
         viewingPost, setViewingPost, showNewPostModal, setShowNewPostModal, replyingTo, setReplyingTo, adminSubPage, setAdminSubPage,
         toastMessage, toastType, editingItemId, setEditingItemId, editingItemType, setEditingItemType, votingKey, setVotingKey,
+        subscription, setSubscription, invoices, setInvoices, payments, setPayments,
         api, fetchAllData, handleSignup, handleLogin, handleLogout, handleSaveProblem, handleDeleteProblem, handleSettingsUpdate, handleChangePassword, handleDeleteAccount,
         handleAdminUpdateUserRole, handleAdminToggleBanUser, handleAdminDeleteUser, handleAdminAddTag, handleAdminDeleteTag, handleAdminAddMetric, handleAdminDeleteMetric,
-        handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
+        handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, refreshBilling, startPremiumCheckout, downloadInvoicePdf, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
         showToast, clearToast, handleProblemSubmit, handleAvatarUpdate,
         handleUpdatePost, handleDeletePost, handleUpdateComment, handleDeleteComment, navigate
     }), [ // Ensure all state and callbacks are listed
         currentUser, users, problems, allTags, allMetrics, submissions, posts, comments, leaderboardData, page, editingProblem, currentView, authMode,
         selectedProblem, viewingUserId, loading, error, confirmModal, imgSrc, isAvatarModalOpen, originalFileName,
         problemHint, isGeneratingHint, leftPanelTab, rightPanelTab, viewingPost, showNewPostModal, replyingTo, adminSubPage,
-        toastMessage, toastType, editingItemId, editingItemType, votingKey, setVotingKey,
+        toastMessage, toastType, editingItemId, editingItemType, votingKey, setVotingKey, subscription, invoices, payments,
         api, fetchAllData, handleSignup, handleLogin, handleLogout, handleSaveProblem, handleDeleteProblem, handleSettingsUpdate, handleChangePassword, handleDeleteAccount,
         handleAdminUpdateUserRole, handleAdminToggleBanUser, handleAdminDeleteUser, handleAdminAddTag, handleAdminDeleteTag, handleAdminAddMetric, handleAdminDeleteMetric,
-        handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
+        handlePostSubmit, handleCommentSubmit, handleVote, handleGetHint, refreshBilling, startPremiumCheckout, downloadInvoicePdf, downloadDataset, openConfirmModal, closeConfirmModal, navigateToProfile,
         showToast, clearToast, handleProblemSubmit, handleAvatarUpdate,
         handleUpdatePost, handleDeletePost, handleUpdateComment, handleDeleteComment, navigate
     ]);
@@ -703,4 +828,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         </AppContext.Provider>
     ); // Line 568
 }; // Line 569
+
+
 

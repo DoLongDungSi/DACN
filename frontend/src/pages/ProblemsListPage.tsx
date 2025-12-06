@@ -1,13 +1,26 @@
-import React, { useState, useMemo } from 'react'; // Added useState, useMemo
-import { Edit2, Trash2, PlusCircle, Search, Tag as TagIcon, X } from 'lucide-react'; // Added Search, TagIcon, X
+import React, { useMemo, useState } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
-import type { Problem, Tag } from '../types'; // Added Tag type
+import type { Problem, Tag } from '../types';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
+import { PlusCircle, Search, SlidersHorizontal, Users, Star, Clock, Tag as TagIcon } from 'lucide-react';
+
+const difficultyBadge: Record<string, string> = {
+    easy: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    medium: 'bg-amber-50 text-amber-700 border-amber-200',
+    hard: 'bg-rose-50 text-rose-700 border-rose-200',
+};
+
+const toPlainText = (content?: string | null) =>
+    (content || '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
 
 export const ProblemsListPage: React.FC = () => {
     const {
         problems,
         allTags,
+        submissions,
         currentUser,
         setSelectedProblem,
         setEditingProblem,
@@ -17,286 +30,260 @@ export const ProblemsListPage: React.FC = () => {
         navigate,
     } = useAppContext();
 
-    // --- State for Filtering ---
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedFilterTags, setSelectedFilterTags] = useState<Tag[]>([]);
-    const [tagSearch, setTagSearch] = useState(''); // For tag filter input
-    const [showTagFilterDropdown, setShowTagFilterDropdown] = useState(false);
+    const [difficultyFilter, setDifficultyFilter] = useState<'all' | 'easy' | 'medium' | 'hard'>('all');
 
     const handleProblemClick = (problem: Problem) => {
         setSelectedProblem(problem);
         setViewingPost(null);
         navigate('problem-detail', problem.id);
-    }
+    };
 
-     const handleEditClick = (e: React.MouseEvent, problem: Problem) => {
-         e.stopPropagation();
-         if (currentUser?.role === 'owner' || problem.authorId === currentUser?.id) {
-            setEditingProblem(problem);
-            navigate('problem-editor');
-         } else {
-             console.warn("User not authorized to edit this problem.");
-         }
-     };
-
-     const handleDeleteClick = (e: React.MouseEvent, id: number, authorId: number | null | undefined) => {
-         e.stopPropagation();
-         if (currentUser?.role === 'owner' || authorId === currentUser?.id) {
-             handleDeleteProblem(id);
-         } else {
-              console.warn("User not authorized to delete this problem.");
-         }
-     };
-
-     const getDifficultyClass = (difficulty: string) => {
-        switch (difficulty) {
-            case 'easy': return 'bg-green-100 text-green-800 border-green-200';
-            case 'medium': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-            case 'hard': return 'bg-red-100 text-red-800 border-red-200';
-            default: return 'bg-slate-100 text-slate-800 border-slate-200';
-        }
+    const toggleTag = (tag: Tag) => {
+        setSelectedFilterTags((prev) =>
+            prev.some((t) => t.id === tag.id) ? prev.filter((t) => t.id !== tag.id) : [...prev, tag]
+        );
     };
 
     const canCreate = currentUser?.role === 'owner' || currentUser?.role === 'creator';
 
-    // --- Filtering Logic ---
     const filteredProblems = useMemo(() => {
         return problems
-            .filter(problem => {
-                // Filter by search term (name)
+            .filter((problem) => {
                 const nameMatch = problem.name.toLowerCase().includes(searchTerm.toLowerCase());
-                // Filter by selected tags (must have ALL selected tags)
-                const tagMatch = selectedFilterTags.every(filterTag =>
-                    problem.tags.includes(filterTag.id)
-                );
-                return nameMatch && tagMatch;
+                const tagMatch = selectedFilterTags.every((tag) => problem.tags.includes(tag.id));
+                const difficultyOk = difficultyFilter === 'all' ? true : problem.difficulty === difficultyFilter;
+                return nameMatch && tagMatch && difficultyOk;
             })
-            .sort((a, b) => a.id - b.id); // Keep the sort
-    }, [problems, searchTerm, selectedFilterTags]);
+            .sort((a, b) => b.id - a.id);
+    }, [problems, searchTerm, selectedFilterTags, difficultyFilter]);
 
-    // --- Tag Filter Handlers ---
-    const handleAddFilterTag = (tag: Tag) => {
-        if (!selectedFilterTags.some(t => t.id === tag.id)) {
-            setSelectedFilterTags(prev => [...prev, tag]);
-        }
-        setTagSearch(''); // Clear search
-        setShowTagFilterDropdown(false); // Hide dropdown
-    };
+    const tagMap = useMemo(() => Object.fromEntries(allTags.map((t) => [t.id, t.name])), [allTags]);
 
-    const handleRemoveFilterTag = (tagIdToRemove: number) => {
-        setSelectedFilterTags(prev => prev.filter(tag => tag.id !== tagIdToRemove));
-    };
+    const participantCountByProblem = useMemo(() => {
+        const userSets = new Map<number, Set<number>>();
+        submissions.forEach((sub) => {
+            if (!userSets.has(sub.problemId)) {
+                userSets.set(sub.problemId, new Set());
+            }
+            userSets.get(sub.problemId)!.add(sub.userId);
+        });
+        const counts = new Map<number, number>();
+        userSets.forEach((set, id) => counts.set(id, set.size));
+        return counts;
+    }, [submissions]);
 
-     const availableFilterTags = useMemo(() => {
-        if (!tagSearch) return allTags.filter(tag => !selectedFilterTags.some(st => st.id === tag.id));
-        return allTags.filter(tag =>
-            !selectedFilterTags.some(st => st.id === tag.id) &&
-            tag.name.toLowerCase().includes(tagSearch.toLowerCase())
+    const ProblemCard = ({ problem }: { problem: Problem }) => {
+        const problemTags = problem.tags.map((tagId) => tagMap[tagId]).filter(Boolean).slice(0, 4);
+        const cover = problem.coverImageUrl;
+        const participants = participantCountByProblem.get(problem.id) || 0;
+        const canEditDelete =
+            currentUser && (currentUser.role === 'owner' || problem.authorId === currentUser.id);
+        const summaryText =
+            problem.summary ||
+            toPlainText(problem.content).slice(0, 180) ||
+            'No description provided yet.';
+
+        return (
+            <div
+                onClick={() => handleProblemClick(problem)}
+                className="group h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg cursor-pointer"
+            >
+                <div className="relative h-40 bg-slate-100">
+                    {cover ? (
+                        <img src={cover} alt={problem.name} className="h-full w-full object-cover" />
+                    ) : (
+                        <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm">
+                            <TagIcon className="w-5 h-5 mr-2" />
+                            No cover image
+                        </div>
+                    )}
+                    <div className="absolute top-3 right-3 inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
+                        <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${difficultyBadge[problem.difficulty] || 'bg-slate-100 text-slate-700 border-slate-200'}`}
+                        >
+                            {problem.difficulty}
+                        </span>
+                        <span className="text-slate-500 uppercase tracking-wide text-[10px]">
+                            {problem.problemType}
+                        </span>
+                    </div>
+                </div>
+                <div className="p-5 space-y-3">
+                    <h3 className="text-lg font-semibold text-slate-900 line-clamp-2">{problem.name}</h3>
+                    <p className="text-sm text-slate-600 line-clamp-3">{summaryText}</p>
+                    {problemTags.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                            {problemTags.map((tag) => (
+                                <span
+                                    key={tag}
+                                    className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200"
+                                >
+                                    {tag}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                    <div className="grid grid-cols-3 gap-3 text-slate-600 text-xs">
+                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <Users className="w-4 h-4 text-slate-500" />
+                            <div>
+                                <div className="text-slate-900 font-semibold">{participants}</div>
+                                <div>Teams</div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <Star className="w-4 h-4 text-slate-500" />
+                            <div>
+                                <div className="text-slate-900 font-semibold">{problem.metrics?.length || 1}</div>
+                                <div>Metrics</div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <Clock className="w-4 h-4 text-slate-500" />
+                            <div>
+                                <div className="text-slate-900 font-semibold">Open</div>
+                                <div>Rolling</div>
+                            </div>
+                        </div>
+                    </div>
+                    {canEditDelete && (
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingProblem(problem);
+                                    navigate('problem-editor');
+                                }}
+                                className="text-xs font-semibold text-slate-700 px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-100"
+                            >
+                                Edit
+                            </button>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteProblem(problem.id);
+                                }}
+                                className="text-xs font-semibold text-rose-600 px-3 py-2 rounded-lg border border-rose-200 hover:bg-rose-50"
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
         );
-    }, [tagSearch, allTags, selectedFilterTags]);
+    };
 
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center h-full py-16 text-slate-500">
+                <LoadingSpinner />
+                <span className="ml-3">Loading competitions...</span>
+            </div>
+        );
+    }
 
     return (
-        <div>
-            {/* Header section */}
-            <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
-                <h1 className="text-3xl font-bold text-slate-900">Danh sách bài toán</h1>
-                {canCreate && (
-                    <button
-                        onClick={() => { setEditingProblem("new"); navigate('problem-editor'); }}
-                        className="w-full sm:w-auto bg-indigo-600 text-white font-bold py-2.5 px-5 rounded-lg flex items-center justify-center hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg text-sm flex-shrink-0"
-                        >
-                        <PlusCircle className="mr-2 h-4 w-4" />
-                        Tạo bài toán mới
-                    </button>
-                 )}
-            </div>
-
-            {/* --- Filter Bar --- */}
-            <div className="mb-8 p-4 bg-white rounded-lg shadow border border-slate-200 flex flex-col md:flex-row gap-4 items-center">
-                {/* Search Input */}
-                <div className="relative flex-grow w-full md:w-auto">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Search className="h-5 w-5 text-slate-400" aria-hidden="true" />
-                    </div>
-                    <input
-                        type="text"
-                        placeholder="Tìm theo tên bài toán..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-md leading-5 bg-white placeholder-slate-500 focus:outline-none focus:placeholder-slate-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
-                </div>
-
-                 {/* Tag Filter */}
-                 <div className="relative w-full md:w-72 flex-shrink-0">
-                     <label className="sr-only">Lọc theo tags</label>
-                     <div className="flex flex-wrap gap-1 items-center p-2 border border-slate-300 rounded-md min-h-[40px] bg-white cursor-text" onClick={() => setShowTagFilterDropdown(true)}>
-                        {selectedFilterTags.map(tag => (
-                             <span key={tag.id} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                {tag.name}
+        <div className="bg-slate-50 text-slate-900">
+            <div className="max-w-7xl mx-auto space-y-6">
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Competitions</p>
+                            <h1 className="text-3xl sm:text-4xl font-bold">Machine Learning Competitions</h1>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap justify-end">
+                            {canCreate && (
                                 <button
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); handleRemoveFilterTag(tag.id); }}
-                                    className="ml-1 p-0.5 rounded-full text-blue-600 hover:bg-blue-200 focus:outline-none"
-                                    aria-label={`Remove ${tag.name} filter`}
+                                    onClick={() => {
+                                        setEditingProblem('new');
+                                        navigate('problem-editor');
+                                    }}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 text-white shadow hover:bg-indigo-700"
                                 >
-                                    <X className="w-3 h-3" />
+                                    <PlusCircle className="w-4 h-4" /> Host a competition
                                 </button>
-                            </span>
-                        ))}
-                         <input
-                            type="text"
-                            value={tagSearch}
-                            onChange={(e) => { setTagSearch(e.target.value); setShowTagFilterDropdown(true); }}
-                            onFocus={() => setShowTagFilterDropdown(true)}
-                            placeholder={selectedFilterTags.length === 0 ? "Lọc theo tags..." : "+ Thêm tag lọc"}
-                            className="flex-grow p-1 text-sm outline-none bg-transparent placeholder-slate-500"
-                        />
-                     </div>
-                     {/* Tag Dropdown */}
-                     {showTagFilterDropdown && (
-                        <div className="absolute z-20 mt-1 w-full bg-white border border-slate-300 rounded-md shadow-lg max-h-48 overflow-y-auto scrollbar-thin">
-                             {availableFilterTags.length > 0 ? (
-                                <ul>
-                                    {availableFilterTags.map(tag => (
-                                        <li key={tag.id}>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleAddFilterTag(tag)}
-                                                className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 flex items-center gap-2"
-                                            >
-                                                <TagIcon className="w-3.5 h-3.5 text-slate-400"/>
-                                                {tag.name}
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            ) : (
-                                <p className="px-3 py-2 text-sm text-slate-500 italic">Không tìm thấy tag phù hợp.</p>
                             )}
                         </div>
-                    )}
-                    {/* Click outside detector for dropdown */}
-                    {showTagFilterDropdown && <button type="button" onClick={() => setShowTagFilterDropdown(false)} tabIndex={-1} className="fixed inset-0 cursor-default -z-1"></button>}
-                 </div>
-            </div>
-
-
-            {/* Loading State */}
-            {loading && problems.length === 0 && ( /* Show loading only if problems haven't loaded yet */
-                <div className="flex justify-center items-center py-10 text-slate-500">
-                    <LoadingSpinner />
-                    <span className="ml-2">Đang tải danh sách bài toán...</span>
+                    </div>
+                    <div className="relative max-w-4xl">
+                        <Search className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+                        <input
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            placeholder="Search competitions..."
+                            className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2.5 text-sm focus:border-indigo-400 focus:ring-indigo-400"
+                        />
+                    </div>
                 </div>
-            )}
 
-            {/* Empty State (after filtering) */}
-            {!loading && filteredProblems.length === 0 && (
-                <div className="text-center py-16 px-6 bg-white rounded-xl shadow border border-slate-200">
-                    <h3 className="text-lg font-semibold text-slate-700 mb-2">Không tìm thấy bài toán</h3>
-                     <p className="text-slate-500 mb-4">
-                        {problems.length === 0 ? 'Hiện tại chưa có bài toán nào được tạo.' : 'Không có bài toán nào khớp với bộ lọc của bạn.'}
-                    </p>
-                    {/* Keep the create button for the absolute empty state */}
-                    {problems.length === 0 && canCreate && (
-                         <button
-                            onClick={() => { setEditingProblem("new"); navigate('problem-editor'); }}
-                            className="bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg text-sm mx-auto"
-                            >
-                            <PlusCircle className="mr-2 h-4 w-4" />
-                            Tạo bài toán đầu tiên
-                        </button>
-                    )}
-                </div>
-            )}
+                {filteredProblems.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-white p-10 text-center text-slate-500">
+                        No competitions found. Adjust filters or create a new one.
+                    </div>
+                ) : (
+                    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                        {filteredProblems.map((problem) => (
+                            <ProblemCard key={problem.id} problem={problem} />
+                        ))}
+                    </div>
+                )}
 
-            {/* Problem List Grid - Now uses filteredProblems */}
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                 {filteredProblems.map((problem) => { // Use filteredProblems
-                    const canEditDelete = currentUser && (currentUser.role === "owner" || problem.authorId === currentUser.id);
-                    const problemTags = problem.tags
-                        .map((tagId) => allTags.find((t) => t.id === tagId)?.name)
-                        .filter(Boolean);
-
-                    return (
-                        <div
-                            key={problem.id}
-                            className="bg-white rounded-xl shadow-md p-6 flex flex-col justify-between border border-slate-200 hover:shadow-lg hover:-translate-y-1 transition-all duration-200 ease-in-out cursor-pointer group focus-within:ring-2 focus-within:ring-indigo-400 focus-within:ring-offset-2"
-                            onClick={() => handleProblemClick(problem)}
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleProblemClick(problem);}}
-                        >
-                            {/* Card Content... (no changes needed inside the card) */}
-                             <div>
-                                <div className="flex justify-between items-start mb-3">
-                                    <h3 className="text-lg font-semibold text-slate-800 break-words pr-2 group-hover:text-indigo-600 transition-colors duration-200 ease-in-out">
-                                         {problem.name}
-                                    </h3>
-                                     {canEditDelete && (
-                                        <div className="flex space-x-1 flex-shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200 ease-in-out">
-                                            <button
-                                                 onClick={(e) => handleEditClick(e, problem)}
-                                                className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-md hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1 z-10"
-                                                aria-label={`Edit ${problem.name}`}
-                                                title="Chỉnh sửa"
-                                            >
-                                                <Edit2 className="w-4 h-4" />
-                                            </button>
-                                             <button
-                                                  onClick={(e) => handleDeleteClick(e, problem.id, problem.authorId ?? undefined)}
-                                                className="text-slate-400 hover:text-red-600 p-1.5 rounded-md hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-1 z-10"
-                                                aria-label={`Delete ${problem.name}`}
-                                                 title="Xóa"
-                                             >
-                                                <Trash2 className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="flex items-center flex-wrap gap-2 mb-4">
-                                    <span
-                                         className={`px-3 py-1 rounded-full border text-xs font-semibold uppercase tracking-wider ${getDifficultyClass(problem.difficulty)}`}
-                                    >
-                                        {problem.difficulty}
-                                    </span>
-                                    <span className="px-3 py-1 rounded-full border text-xs font-medium bg-slate-100 text-slate-700 border-slate-200 capitalize">
-                                        {problem.problemType}
-                                    </span>
-                                </div>
-                                 {problemTags.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5 mb-4 max-h-12 overflow-hidden">
-                                        {problemTags.map((tag) => (
-                                            <span key={tag} className="px-2 py-0.5 text-xs bg-slate-100 text-slate-600 rounded-full border border-slate-200">
-                                                {tag}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-                                <p className="text-slate-600 text-sm line-clamp-3 leading-relaxed">
-                                     {problem.content ? problem.content.replace(/<[^>]*>/g, '').substring(0, 150) + (problem.content.length > 150 ? '...' : '') : <span className="italic">Không có mô tả.</span>}
-                                </p>
-                            </div>
-                             <div className="mt-6 pt-4 border-t border-slate-100 flex justify-between items-center">
-                                <p className="text-xs text-slate-500">
-                                     Tạo bởi: <strong className="text-slate-600">{problem.authorUsername || 'N/A'}</strong>
-                                </p>
-                                <span className="text-indigo-600 font-semibold text-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200 ease-in-out">
-                                     Xem chi tiết &rarr;
-                                </span>
-                            </div>
+                {/* Filters Section at Bottom */}
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                            <SlidersHorizontal className="w-4 h-4" />
+                            Filters
                         </div>
-                    );
-                })}
+                        <button
+                            onClick={() => { setSelectedFilterTags([]); setDifficultyFilter('all'); }}
+                            className="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100"
+                        >
+                            Clear all
+                        </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {(['all', 'easy', 'medium', 'hard'] as const).map((level) => (
+                            <button
+                                key={level}
+                                onClick={() => setDifficultyFilter(level)}
+                                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                                    difficultyFilter === level
+                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                                }`}
+                            >
+                                {level === 'all' ? 'All difficulties' : level}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="space-y-2">
+                        <div className="text-xs font-semibold uppercase text-slate-500">Tags</div>
+                        <div className="flex flex-wrap gap-2">
+                            {allTags.map((tag) => {
+                                const active = selectedFilterTags.some((t) => t.id === tag.id);
+                                return (
+                                    <button
+                                        key={tag.id}
+                                        onClick={() => toggleTag(tag)}
+                                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold ${
+                                            active
+                                                ? 'bg-slate-900 text-white border-slate-900'
+                                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                        }`}
+                                    >
+                                        <TagIcon className="w-3 h-3" />
+                                        {tag.name}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
             </div>
-            {/* Scrollbar Style */}
-            <style>{`
-                .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; }
-                .scrollbar-thin::-webkit-scrollbar { width: 6px; }
-                .scrollbar-thin::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
-                .scrollbar-thin::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; border: 1px solid #f1f5f9; }
-            `}</style>
         </div>
     );
 };

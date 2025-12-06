@@ -2,12 +2,9 @@
 const express = require('express');
 const pool = require('../config/db');
 const { toCamelCase } = require('../utils/helpers');
-const fs = require('fs');
-const path = require('path');
+const { DATA_ROOT, readFileContent } = require('../utils/storage');
 
 const router = express.Router();
-
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../storage');
 
 const parseDatasets = (datasets) => {
   if (!datasets) return [];
@@ -16,36 +13,13 @@ const parseDatasets = (datasets) => {
   catch (e) { return []; }
 };
 
-const resolveFilePath = (fileRef) => {
-  if (!fileRef) return null;
-  if (path.isAbsolute(fileRef)) return fileRef;
-  return path.join(DATA_ROOT, fileRef);
-};
-
 const loadDatasetFromDisk = (entry) => {
   if (!entry) return null;
-  const candidatePaths = [];
-  if (entry.path) candidatePaths.push(resolveFilePath(entry.path));
-  if (entry.filename) {
-    const sanitizedFilename = path.basename(entry.filename);
-    candidatePaths.push(
-      path.join('/usr/src/test', sanitizedFilename),
-      path.join(__dirname, '../../test', sanitizedFilename),
-      path.join(process.cwd(), 'test', sanitizedFilename),
-    );
+  const content = readFileContent(entry.path, entry.filename);
+  if (!content) {
+    console.warn(`[datasets] Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
   }
-  for (const candidate of candidatePaths) {
-    try {
-      if (candidate && fs.existsSync(candidate)) {
-        console.log(`[datasets] Reading dataset file from disk: ${candidate}`);
-        return fs.readFileSync(candidate, 'utf8');
-      }
-    } catch (e) {
-      console.error('[datasets] Error reading dataset file', candidate, e);
-    }
-  }
-  console.warn(`[datasets] Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
-  return null;
+  return content;
 };
 
 const buildDatasetList = (problemRow) => {
@@ -55,10 +29,23 @@ const buildDatasetList = (problemRow) => {
     .filter(entry => entry && entry.split)
     .map(entry => {
       const split = entry.split;
+      let sizeBytes = entry.sizeBytes || null;
+      if (entry.path) {
+        const resolved = readFileContent(entry.path) !== null ? entry.path : null;
+        if (resolved) {
+          try {
+            const stat = require('fs').statSync(require('path').isAbsolute(entry.path) ? entry.path : require('path').join(DATA_ROOT, entry.path));
+            sizeBytes = stat.size;
+          } catch (err) {
+            console.warn(`[datasets] Could not stat file for ${entry.path}:`, err.message || err);
+          }
+        }
+      }
       const sanitized = {
         split,
         filename: entry.filename || `${split}.csv`,
         path: entry.path,
+        sizeBytes,
         download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
       };
       return sanitized;
@@ -80,17 +67,18 @@ router.get('/', async (req, res) => {
       allVotesRes,
     ] = await Promise.all([
       pool.query(
-        'SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned FROM users'
+        'SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium FROM users'
       ),
       // Query to fetch problems along with their tags and metrics as arrays
       pool.query(
         `SELECT
-            p.id, p.name, p.difficulty, p.content, p.problem_type, p.author_id, p.created_at,
+            p.id, p.name, p.difficulty, p.content, p.summary, p.problem_type, p.author_id, p.created_at,
             u.username as author_username,
             p.datasets,
             (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-            (CASE WHEN p.ground_truth_content IS NOT NULL AND p.ground_truth_content != '' THEN true ELSE false END) as has_ground_truth,
-            (CASE WHEN p.public_test_content IS NOT NULL AND p.public_test_content != '' THEN true ELSE false END) as has_public_test,
+            (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
+            (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
+            p.cover_image_url,
             COALESCE(tags.tag_ids, '{}'::int[]) as tags,
             COALESCE(metrics.metric_ids, '{}'::int[]) as metrics,
             COALESCE(metric_links.links, '[]'::jsonb) as metrics_links
