@@ -7,12 +7,19 @@ const { v4: uuidv4 } = require('uuid');
 const pool = require('../config/db');
 const { authMiddleware } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
+// Import đúng các hàm đã export từ storage.js
 const { DATA_ROOT, ensureDir } = require('../utils/storage');
 
 const router = express.Router();
 
+// Sử dụng DATA_ROOT đã được đảm bảo không undefined
 const INVOICE_DIR = path.join(DATA_ROOT, 'invoices');
-ensureDir(INVOICE_DIR);
+// Gọi hàm ensureDir an toàn
+try {
+    ensureDir(INVOICE_DIR);
+} catch (e) {
+    console.error("Error creating invoice dir:", e);
+}
 
 const PLAN_PRICING = {
   'premium-monthly': { amountCents: 9900, interval: '1 month' },
@@ -173,7 +180,7 @@ const activatePremium = async (userId, plan, amountCents, currency, provider, pr
   }
 };
 
-// Checkout endpoint (Giữ nguyên logic cũ nhưng refactor vào helper)
+// Checkout endpoint
 router.post('/checkout', authMiddleware, async (req, res) => {
   const plan = req.body?.plan || 'premium-monthly';
   const currency = (req.body?.currency || 'usd').toLowerCase();
@@ -183,7 +190,7 @@ router.post('/checkout', authMiddleware, async (req, res) => {
   return activatePremium(req.userId, plan, pricing.amountCents, currency, 'internal', 'mock-checkout-ref', res);
 });
 
-// Redeem Key endpoint (Mới)
+// Redeem Key endpoint
 router.post('/redeem', authMiddleware, async (req, res) => {
   const { key } = req.body;
   
@@ -192,7 +199,6 @@ router.post('/redeem', authMiddleware, async (req, res) => {
   }
 
   // Key xịn thì free tiền (0 cents) hoặc set giá trị tùy logic
-  // Ở đây tôi set giá trị tượng trưng 0 VND để hóa đơn ghi nhận là quà tặng/key
   return activatePremium(req.userId, 'premium-monthly', 0, 'vnd', 'license_key', key, res);
 });
 

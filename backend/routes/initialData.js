@@ -1,181 +1,155 @@
-// backend/routes/initialData.js
 const express = require('express');
-const pool = require('../config/db');
-const { toCamelCase } = require('../utils/helpers');
-const { DATA_ROOT, readFileContent } = require('../utils/storage');
-
 const router = express.Router();
+const pool = require('../config/db');
+const { optionalAuth } = require('../middleware/auth');
+const { toCamelCase } = require('../utils/helpers');
+const fs = require('fs');
+const path = require('path');
+const bcrypt = require('bcryptjs');
 
-const parseDatasets = (datasets) => {
-  if (!datasets) return [];
-  if (Array.isArray(datasets)) return datasets;
-  try { return JSON.parse(datasets); }
-  catch (e) { return []; }
+// Đường dẫn file initial.json
+const INITIAL_DATA_PATH = path.join(__dirname, '../../initial.json');
+
+// Hàm Seed (Giữ nguyên logic seed)
+const seedDatabase = async () => {
+    if (!fs.existsSync(INITIAL_DATA_PATH)) {
+        console.warn('File initial.json not found');
+        return;
+    }
+    const data = JSON.parse(fs.readFileSync(INITIAL_DATA_PATH, 'utf8'));
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        // Seed Tags
+        if (data.tags) {
+            for (const tag of data.tags) {
+                const check = await client.query('SELECT id FROM tags WHERE name = $1', [tag.name]);
+                if (check.rows.length === 0) {
+                    await client.query('INSERT INTO tags (name, description, color) VALUES ($1, $2, $3)', [tag.name, tag.description || '', tag.color || '#6366f1']);
+                }
+            }
+        }
+
+        // Seed Metrics
+        if (data.metrics) {
+            for (const metric of data.metrics) {
+                const check = await client.query('SELECT id FROM metrics WHERE key = $1', [metric.key]);
+                if (check.rows.length === 0) {
+                    await client.query('INSERT INTO metrics (key, name, description, direction) VALUES ($1, $2, $3, $4)', [metric.key, metric.name, metric.description || '', metric.direction || 'max']);
+                }
+            }
+        }
+
+        // Seed Users
+        if (data.users) {
+            for (const user of data.users) {
+                const check = await client.query('SELECT id FROM users WHERE username = $1', [user.username]);
+                if (check.rows.length === 0) {
+                    const hashedPassword = await bcrypt.hash(user.password || '123456', 10);
+                    await client.query('INSERT INTO users (username, email, password_hash, role, avatar_color) VALUES ($1, $2, $3, $4, $5)', [user.username, user.email, hashedPassword, user.role || 'user', user.avatar_color || '#ef4444']);
+                }
+            }
+        }
+
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error("Seeding Error:", e);
+    } finally {
+        client.release();
+    }
 };
 
-const loadDatasetFromDisk = (entry) => {
-  if (!entry) return null;
-  const content = readFileContent(entry.path, entry.filename);
-  if (!content) {
-    console.warn(`[datasets] Dataset fallback not found for entry: ${JSON.stringify(entry)}`);
-  }
-  return content;
-};
-
-const buildDatasetList = (problemRow) => {
-  const rawDatasets = parseDatasets(problemRow.datasets);
-  if (!Array.isArray(rawDatasets)) return [];
-  return rawDatasets
-    .filter(entry => entry && entry.split)
-    .map(entry => {
-      const split = entry.split;
-      let sizeBytes = entry.sizeBytes || null;
-      if (entry.path) {
-        const resolved = readFileContent(entry.path) !== null ? entry.path : null;
-        if (resolved) {
-          try {
-            const stat = require('fs').statSync(require('path').isAbsolute(entry.path) ? entry.path : require('path').join(DATA_ROOT, entry.path));
-            sizeBytes = stat.size;
-          } catch (err) {
-            console.warn(`[datasets] Could not stat file for ${entry.path}:`, err.message || err);
-          }
+router.get('/', optionalAuth, async (req, res) => {
+    try {
+        // Auto-seed nếu DB trống
+        const countRes = await pool.query('SELECT COUNT(*) FROM tags');
+        if (parseInt(countRes.rows[0].count) === 0) {
+            console.log("Database empty, auto-seeding...");
+            await seedDatabase();
         }
-      }
-      const sanitized = {
-        split,
-        filename: entry.filename || `${split}.csv`,
-        path: entry.path,
-        sizeBytes,
-        download_url: `/api/problems/${problemRow.id}/datasets/${split}`,
-      };
-      return sanitized;
-    })
-    .filter(entry => entry.split !== 'ground_truth');
-};
 
-router.get('/', async (req, res) => {
-  try {
-    // Parallel database queries
-    const [
-      usersRes,
-      problemsRes,
-      tagsRes,
-      metricsRes,
-      submissionsRes,
-      postsRes,
-      commentsRes,
-      allVotesRes,
-    ] = await Promise.all([
-      pool.query(
-        'SELECT id, username, email, role, joined_at, avatar_color, avatar_url, profile, is_banned, is_premium FROM users'
-      ),
-      // Query to fetch problems along with their tags and metrics as arrays
-      pool.query(
-        `SELECT
-            p.id, p.name, p.difficulty, p.content, p.summary, p.problem_type, p.author_id, p.created_at,
-            u.username as author_username,
-            p.datasets,
-            (CASE WHEN p.evaluation_script IS NOT NULL AND p.evaluation_script != '' THEN true ELSE false END) as has_evaluation_script,
-            (CASE WHEN p.ground_truth_path IS NOT NULL AND p.ground_truth_path != '' THEN true ELSE false END) as has_ground_truth,
-            (CASE WHEN p.public_test_path IS NOT NULL AND p.public_test_path != '' THEN true ELSE false END) as has_public_test,
-            p.cover_image_url,
-            COALESCE(tags.tag_ids, '{}'::int[]) as tags,
-            COALESCE(metrics.metric_ids, '{}'::int[]) as metrics,
-            COALESCE(metric_links.links, '[]'::jsonb) as metrics_links
-         FROM problems p
-         JOIN users u ON p.author_id = u.id
-         LEFT JOIN (
-           SELECT problem_id, array_agg(tag_id ORDER BY tag_id) as tag_ids
-           FROM problem_tags
-           GROUP BY problem_id
-         ) tags ON p.id = tags.problem_id
-         LEFT JOIN (
-           SELECT problem_id, array_agg(metric_id ORDER BY metric_id) as metric_ids
-           FROM problem_metrics
-           GROUP BY problem_id
-         ) metrics ON p.id = metrics.problem_id
-         LEFT JOIN (
-           SELECT pm.problem_id,
-                  jsonb_agg(
-                     jsonb_build_object('metricId', pm.metric_id, 'isPrimary', pm.is_primary)
-                     ORDER BY CASE WHEN pm.is_primary THEN 0 ELSE 1 END, pm.metric_id
-                  ) as links
-           FROM problem_metrics pm
-           GROUP BY pm.problem_id
-         ) metric_links ON p.id = metric_links.problem_id
-         ORDER BY p.id`
-      ),
-      pool.query('SELECT * FROM tags ORDER BY name'),
-      pool.query('SELECT * FROM metrics ORDER BY key'),
-      pool.query('SELECT s.*, u.username FROM submissions s JOIN users u ON s.user_id = u.id ORDER BY s.submitted_at DESC'), // Order submissions
-      pool.query(
-        'SELECT p.*, u.username, u.avatar_color, u.avatar_url FROM discussion_posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC' // Order posts
-      ),
-      pool.query(
-        'SELECT c.*, u.username, u.avatar_color, u.avatar_url FROM discussion_comments c JOIN users u ON c.user_id = u.id ORDER BY c.created_at ASC' // Order comments chronologically
-      ),
-      pool.query('SELECT * from votes'), // Fetch all votes once
-    ]);
+        const tagsRes = await pool.query('SELECT * FROM tags ORDER BY name ASC');
+        const metricsRes = await pool.query('SELECT * FROM metrics ORDER BY key ASC');
 
-    // Process votes efficiently using a Map
-    const voteMap = new Map(); // Key: 'post-1' or 'comment-5', Value: { upvotedBy: [], downvotedBy: [] }
-    allVotesRes.rows.forEach(vote => {
-        const targetType = vote.post_id ? 'post' : 'comment';
-        const targetId = vote.post_id || vote.comment_id;
-        const key = `${targetType}-${targetId}`;
+        // Lấy danh sách problems
+        const problemsRes = await pool.query(`
+            SELECT p.id, p.name, p.difficulty, p.problem_type, p.cover_image_url,
+                   p.created_at, p.summary, p.is_frozen,
+                   (SELECT COUNT(*) FROM submissions s WHERE s.problem_id = p.id) as submission_count
+            FROM problems p
+            ORDER BY p.created_at DESC
+        `);
 
-        if (!voteMap.has(key)) {
-            voteMap.set(key, { upvotedBy: [], downvotedBy: [] });
+        // Lấy bài thảo luận
+        const postsRes = await pool.query(`
+            SELECT p.*, u.username, u.avatar_color, u.avatar_url,
+            (SELECT COUNT(*) FROM votes WHERE post_id = p.id AND vote_type = 1) as upvotes,
+            (SELECT COUNT(*) FROM votes WHERE post_id = p.id AND vote_type = -1) as downvotes
+            FROM discussion_posts p
+            JOIN users u ON p.user_id = u.id
+            ORDER BY p.created_at DESC LIMIT 50
+        `);
+
+        // Lấy bình luận
+        const commentsRes = await pool.query(`
+            SELECT c.*, u.username, u.avatar_color, u.avatar_url,
+            (SELECT COUNT(*) FROM votes WHERE comment_id = c.id AND vote_type = 1) as upvotes,
+            (SELECT COUNT(*) FROM votes WHERE comment_id = c.id AND vote_type = -1) as downvotes
+            FROM discussion_comments c
+            JOIN users u ON c.user_id = u.id
+            ORDER BY c.created_at ASC
+        `);
+
+        // [QUAN TRỌNG] Lấy danh sách Users (Thông tin public) để hiển thị Profile/Avatar
+        const usersRes = await pool.query(`
+            SELECT id, username, role, avatar_url, avatar_color, joined_at, profile
+            FROM users
+        `);
+
+        let currentUser = null;
+        let userSubmissions = [];
+
+        if (req.userId) {
+            const userRes = await pool.query('SELECT id, username, email, role, avatar_url, avatar_color, is_premium FROM users WHERE id = $1', [req.userId]);
+            if (userRes.rows.length > 0) currentUser = toCamelCase(userRes.rows[0]);
+
+            const subRes = await pool.query(`
+                SELECT s.*, p.name as problem_name 
+                FROM submissions s
+                JOIN problems p ON s.problem_id = p.id
+                WHERE s.user_id = $1
+                ORDER BY s.submitted_at DESC
+            `, [req.userId]);
+            userSubmissions = toCamelCase(subRes.rows);
         }
-        const votes = voteMap.get(key);
-        if (vote.vote_type === 1) {
-            votes.upvotedBy.push(vote.user_id);
-        } else if (vote.vote_type === -1) {
-            votes.downvotedBy.push(vote.user_id);
-        }
-    });
 
-    // Helper to add votes to posts or comments
-    const addVotes = (item, type) => {
-        const key = `${type}-${item.id}`;
-        const votes = voteMap.get(key) || { upvotedBy: [], downvotedBy: [] };
-        return {
-            ...item,
-            upvotedBy: votes.upvotedBy,
-            downvotedBy: votes.downvotedBy,
-        };
-    };
+        res.json({
+            tags: toCamelCase(tagsRes.rows),
+            metrics: toCamelCase(metricsRes.rows),
+            problems: toCamelCase(problemsRes.rows),
+            posts: toCamelCase(postsRes.rows),
+            comments: toCamelCase(commentsRes.rows),
+            users: toCamelCase(usersRes.rows), // <--- Cần thiết để fix lỗi Profile
+            submissions: userSubmissions,
+            user: currentUser,
+            config: { allowSignups: true, maintenanceMode: false }
+        });
+    } catch (err) {
+        console.error("Initial Data Error:", err);
+        res.json({ tags: [], metrics: [], problems: [], submissions: [], posts: [], comments: [], users: [], user: null, error: 'Failed' });
+    }
+});
 
-
-    // Process submissions to convert numeric strings to numbers
-    const processedSubmissions = submissionsRes.rows.map((sub) => ({
-      ...sub,
-      // Ensure score and runtime are numbers, handle potential nulls
-      public_score: sub.public_score ? parseFloat(sub.public_score) : null,
-      runtime_ms: sub.runtime_ms ? parseFloat(sub.runtime_ms) : null,
-    }));
-
-    const normalizedProblems = problemsRes.rows.map(problem => {
-        problem.datasets = buildDatasetList(problem);
-        return problem;
-    });
-
-    // Respond with camelCased data
-    res.json(
-      toCamelCase({
-        users: usersRes.rows,
-        problems: normalizedProblems,
-        tags: tagsRes.rows,
-        metrics: metricsRes.rows,
-        submissions: processedSubmissions,
-        posts: postsRes.rows.map(post => addVotes(post, 'post')),
-        comments: commentsRes.rows.map(comment => addVotes(comment, 'comment')),
-      })
-    );
-  } catch (error) {
-    console.error('Error fetching initial data:', error);
-    res.status(500).json({ message: 'Failed to load initial data from server.' });
-  }
+router.post('/seed', async (req, res) => {
+    try {
+        await seedDatabase();
+        res.json({ success: true, message: 'Seeding complete' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 module.exports = router;

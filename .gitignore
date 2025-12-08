@@ -199,3 +199,5 @@ pyrightconfig.json
 *.docx
 
 docx/
+
+.env

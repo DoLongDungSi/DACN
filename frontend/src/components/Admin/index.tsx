@@ -1,13 +1,13 @@
 import React from 'react';
-import { Ban, CheckCircle, Trash2, Shield } from 'lucide-react';
+import { Ban, CheckCircle, Trash2 } from 'lucide-react';
 import type { User, Role } from '../../types';
-import { OWNER_ID } from '../../api'; // Assuming OWNER_ID is defined in api/index.ts
+import { OWNER_ID } from '../../api';
 
 interface AdminUsersPanelProps {
     users: User[];
     onUpdateRole: (id: number, role: Role) => void;
     onToggleBan: (id: number) => void;
-    onDeleteUser: (id: number) => void;
+    onDeleteUser: (id: number, username: string) => void; // FIX: Thêm username vào interface
 }
 
 export const AdminUsersPanel: React.FC<AdminUsersPanelProps> = ({
@@ -21,7 +21,6 @@ export const AdminUsersPanel: React.FC<AdminUsersPanelProps> = ({
 
     return (
         <div>
-            {/* <h2 className="text-2xl font-bold mb-6 text-slate-800">Quản lý người dùng</h2> */}
             <div className="bg-white rounded-xl shadow-md overflow-hidden border border-slate-200">
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -53,8 +52,6 @@ export const AdminUsersPanel: React.FC<AdminUsersPanelProps> = ({
                                         >
                                             <option value="user">User</option>
                                             <option value="creator">Creator</option>
-                                            {/* Owner role is typically not assignable via UI */}
-                                            {/* <option value="owner">Owner</option> */}
                                         </select>
                                     </td>
                                     <td className="p-4">
@@ -77,8 +74,9 @@ export const AdminUsersPanel: React.FC<AdminUsersPanelProps> = ({
                                             >
                                                 {user.isBanned ? <CheckCircle className="w-5 h-5" /> : <Ban className="w-5 h-5" />}
                                             </button>
+                                            {/* FIX: Truyền thêm username vào hàm xóa */}
                                             <button
-                                                onClick={() => onDeleteUser(user.id)}
+                                                onClick={() => onDeleteUser(user.id, user.username)}
                                                 className="p-1 rounded text-red-600 hover:bg-red-100"
                                                 title={`Xóa ${user.username}`}
                                                 >
@@ -95,6 +93,3 @@ export const AdminUsersPanel: React.FC<AdminUsersPanelProps> = ({
         </div>
     );
 };
-
-// You can export other Admin related components from here if needed
-// export { AdminManagementPage } from './AdminManagementPage';

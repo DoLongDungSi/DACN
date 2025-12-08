@@ -1,13 +1,110 @@
 // backend/routes/discussion.js
 const express = require('express');
 const pool = require('../config/db');
-const { authMiddleware } = require('../middleware/auth');
+// [THAY ĐỔI 1] Import thêm optionalAuth
+const { authMiddleware, optionalAuth } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
 
 const router = express.Router();
 
-// Middleware applied to all discussion routes requiring authentication
+// --- [THÊM MỚI] GET: Lấy danh sách bài viết ---
+// Dùng optionalAuth để ai cũng xem được, nhưng nếu login thì biết mình đã like bài nào
+router.get('/posts', optionalAuth, async (req, res) => {
+    const { problemId } = req.query;
+    const userId = req.userId || null;
+
+    try {
+        let query = `
+            SELECT p.*, u.username, u.avatar_color, u.avatar_url,
+            (SELECT COUNT(*) FROM discussion_comments c WHERE c.post_id = p.id) as comment_count
+            FROM discussion_posts p
+            JOIN users u ON p.user_id = u.id
+        `;
+        const params = [];
+
+        if (problemId) {
+            query += ` WHERE p.problem_id = $1`;
+            params.push(problemId);
+        }
+
+        query += ` ORDER BY p.created_at DESC`;
+
+        const { rows } = await pool.query(query, params);
+
+        // Lấy thông tin vote của user hiện tại (nếu đã login)
+        let userVotes = [];
+        if (userId) {
+            const voteRes = await pool.query('SELECT post_id, vote_type FROM votes WHERE user_id = $1 AND post_id IS NOT NULL', [userId]);
+            userVotes = voteRes.rows;
+        }
+
+        const posts = rows.map(row => {
+            const post = toCamelCase(row);
+            post.upvotedBy = []; 
+            post.downvotedBy = [];
+            
+            // Giả lập mảng vote để frontend tái sử dụng logic cũ
+            const myVote = userVotes.find(v => v.post_id === row.id);
+            if (myVote?.vote_type === 1) post.upvotedBy.push(userId);
+            if (myVote?.vote_type === -1) post.downvotedBy.push(userId);
+            
+            // Tính tổng điểm vote (đơn giản hóa)
+            // (Trong thực tế nên query SUM từ DB, nhưng để giữ code đơn giản ta để frontend tự tính hoặc thêm subquery nếu cần)
+            return post;
+        });
+
+        res.json({ posts });
+    } catch (err) {
+        console.error('Get Posts Error:', err);
+        res.status(500).json({ message: 'Lỗi server khi tải bài viết.' });
+    }
+});
+
+// --- [THÊM MỚI] GET: Lấy bình luận ---
+router.get('/comments', optionalAuth, async (req, res) => {
+    const { postId } = req.query;
+    const userId = req.userId || null;
+
+    if (!postId) return res.status(400).json({ message: 'Thiếu postId' });
+
+    try {
+        const query = `
+            SELECT c.*, u.username, u.avatar_color, u.avatar_url
+            FROM discussion_comments c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.post_id = $1
+            ORDER BY c.created_at ASC
+        `;
+        const { rows } = await pool.query(query, [postId]);
+
+        // Lấy vote của user
+        let userVotes = [];
+        if (userId) {
+            const voteRes = await pool.query('SELECT comment_id, vote_type FROM votes WHERE user_id = $1 AND comment_id IS NOT NULL', [userId]);
+            userVotes = voteRes.rows;
+        }
+
+        const comments = rows.map(row => {
+            const comment = toCamelCase(row);
+            comment.upvotedBy = [];
+            comment.downvotedBy = [];
+            const myVote = userVotes.find(v => v.comment_id === row.id);
+            if (myVote?.vote_type === 1) comment.upvotedBy.push(userId);
+            if (myVote?.vote_type === -1) comment.downvotedBy.push(userId);
+            return comment;
+        });
+
+        res.json({ comments });
+    } catch (err) {
+        console.error('Get Comments Error:', err);
+        res.status(500).json({ message: 'Lỗi server khi tải bình luận.' });
+    }
+});
+
+// ==================================================================
+// [QUAN TRỌNG] Middleware Auth chỉ áp dụng cho các lệnh bên dưới (Ghi/Sửa/Xóa)
 router.use(authMiddleware);
+// ==================================================================
 
 // --- Create Discussion Post ---
 router.post('/posts', async (req, res) => {

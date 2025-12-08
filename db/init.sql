@@ -1,4 +1,4 @@
--- Drop old tables if they exist
+-- Drop old tables if they exist to ensure clean state
 DROP TABLE IF EXISTS votes, discussion_comments, discussion_posts, submissions, problem_metrics, problem_tags, problems, metrics, tags, invoices, payments, subscriptions, users CASCADE;
 
 -- Users Table
@@ -20,21 +20,26 @@ CREATE TABLE users (
 CREATE TABLE tags ( id SERIAL PRIMARY KEY, name VARCHAR(50) UNIQUE NOT NULL );
 CREATE TABLE metrics ( id SERIAL PRIMARY KEY, key VARCHAR(50) UNIQUE NOT NULL, direction VARCHAR(10) NOT NULL ); -- direction: 'maximize' or 'minimize'
 
--- Problems Table (stores dataset paths instead of inline CSV content)
+-- Problems Table (Updated with new columns)
 CREATE TABLE problems (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     difficulty VARCHAR(20) NOT NULL, -- 'easy', 'medium', 'hard'
     content TEXT NOT NULL, -- Markdown content
-    summary TEXT,
+    summary TEXT, -- Short description
     problem_type VARCHAR(50) NOT NULL, -- 'classification', 'regression', 'other'
     author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     datasets JSONB, -- Stores array of {split, filename, path, sizeBytes?} metadata
     evaluation_script TEXT, -- Stores the Python evaluation script content
-    ground_truth_path TEXT, -- Path to ground truth CSV on disk
-    public_test_path TEXT, -- Path to public test CSV on disk
-    cover_image_url TEXT
+    cover_image_url TEXT, -- Path or URL to cover image
+    data_description TEXT, -- Description of data
+    prizes TEXT, -- Prize details
+    is_frozen BOOLEAN NOT NULL DEFAULT FALSE, -- Contest status
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE, -- Soft delete flag
+    tags JSONB DEFAULT '[]'::JSONB, -- Denormalized tag names for quick access
+    metrics JSONB DEFAULT '[]'::JSONB -- Denormalized metric keys for quick access
 );
 
 -- Junction Table: Problem <-> Tags
@@ -95,10 +100,14 @@ CREATE TABLE submissions (
     problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL, -- 'pending', 'succeeded', 'failed', 'format_error', 'runtime_error'
-    public_score NUMERIC(12, 6), -- Score based on public test/ground truth, NULL if failed/pending
+    public_score NUMERIC(12, 6), -- Score based on public test, NULL if failed/pending
+    private_score NUMERIC(12, 6), -- Score based on ground truth, NULL if failed/pending
     runtime_ms NUMERIC(10, 2), -- Execution time in milliseconds
     submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    evaluation_details JSONB -- Store potential error messages from evaluation (structured)
+    evaluated_at TIMESTAMPTZ,
+    file_path TEXT, -- Path to submission file
+    evaluation_details JSONB, -- Store potential error messages from evaluation (structured)
+    is_official BOOLEAN NOT NULL DEFAULT TRUE -- Determines if submission counts for leaderboard
 );
 
 -- Discussion: Posts Table
@@ -146,139 +155,6 @@ INSERT INTO tags (id, name) VALUES (1, 'classification'), (2, 'regression'), (3,
 -- Sample Metrics
 INSERT INTO metrics (id, key, direction) VALUES (1, 'accuracy', 'maximize'), (2, 'rmse', 'minimize');
 
--- Sample Problem 1: Classification
-INSERT INTO problems (id, name, difficulty, content, summary, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path, cover_image_url) VALUES
-(1, 'Titanic - Survival Prediction', 'easy',
-'### Overview
-Predict passenger survival on the Titanic. Keep the submission format exactly with columns `PassengerId` and `Survived`.
-
-### Files
-- `titanic_train.csv`
-- `titanic_public_test.csv`
-- Submission must be CSV with `PassengerId,Survived`.
-
-### Metric
-Primary metric: Accuracy.',
-'Start with a clean baseline for the classic Kaggle Titanic challenge.',
-'classification', 1,
-E''[
-  {"split":"train","filename":"titanic_train.csv","path":"problems/titanic/train.csv"},
-  {"split":"public_test","filename":"titanic_public_test.csv","path":"problems/titanic/public_test.csv"},
-  {"split":"ground_truth","filename":"titanic_ground_truth.csv","path":"problems/titanic/ground_truth.csv"}
-]'',
-$$
-import sys
-import pandas as pd
-from sklearn.metrics import accuracy_score
-
-def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
-    try:
-        sub_df = pd.read_csv(submission_path)
-        gt_df = pd.read_csv(ground_truth_path)
-        test_df = pd.read_csv(public_test_path)
-    except Exception as exc:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("-1.0")
-        sys.exit(1)
-
-    required_cols = {"PassengerId", "Survived"}
-    if not required_cols.issubset(sub_df.columns) or len(sub_df) != len(test_df):
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("-1.0")
-        sys.exit(1)
-
-    merged = pd.merge(sub_df, gt_df, on="PassengerId", how="inner")
-    if len(merged) != len(sub_df):
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("0.0")
-        sys.exit(1)
-
-    score = accuracy_score(merged["Survived_y"], merged["Survived_x"].round().astype(int))
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(str(float(score)))
-
-if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        sys.exit(1)
-    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-$$,
-'problems/titanic/ground_truth.csv',
-'problems/titanic/public_test.csv',
-'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1200&q=80&auto=format&fit=crop');
-
--- Sample Problem 2: Regression
-INSERT INTO problems (id, name, difficulty, content, summary, problem_type, author_id, datasets, evaluation_script, ground_truth_path, public_test_path, cover_image_url) VALUES
-(2, 'House Prices - Baseline Regression', 'medium',
-'### Overview
-Predict house sale prices. Submission must contain `Id,SalePrice`.
-
-### Files
-- `housing_train.csv`
-- `housing_public_test.csv`
-
-### Metric
-Primary metric: RMSE (lower is better).',
-'Simple baseline for tabular regression.',
-'regression', 1,
-E''[
-  {"split":"train","filename":"housing_train.csv","path":"problems/housing/train.csv"},
-  {"split":"public_test","filename":"housing_public_test.csv","path":"problems/housing/public_test.csv"},
-  {"split":"ground_truth","filename":"housing_ground_truth.csv","path":"problems/housing/ground_truth.csv"}
-]'',
-$$
-import sys
-import pandas as pd
-import numpy as np
-from sklearn.metrics import mean_squared_error
-
-def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
-    try:
-        sub_df = pd.read_csv(submission_path)
-        gt_df = pd.read_csv(ground_truth_path)
-        test_df = pd.read_csv(public_test_path)
-    except Exception:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("-1.0")
-        sys.exit(1)
-
-    required_cols = {"Id", "SalePrice"}
-    if not required_cols.issubset(sub_df.columns) or len(sub_df) != len(test_df):
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("-1.0")
-        sys.exit(1)
-
-    merged = pd.merge(sub_df, gt_df, on="Id", how="inner")
-    if len(merged) != len(sub_df):
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("0.0")
-        sys.exit(1)
-
-    rmse = mean_squared_error(merged["SalePrice_y"], merged["SalePrice_x"], squared=False)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(str(float(rmse)))
-
-if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        sys.exit(1)
-    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-$$,
-'problems/housing/ground_truth.csv',
-'problems/housing/public_test.csv',
-'https://images.unsplash.com/photo-1505691938895-1758d7feb511?w=1200&q=80&auto=format&fit=crop');
-
--- Link Problems to Tags/Metrics
-INSERT INTO problem_tags (problem_id, tag_id) VALUES (1, 1), (1, 3), (1, 5), (2, 2), (2, 3), (2, 4);
-INSERT INTO problem_metrics (problem_id, metric_id, is_primary) VALUES (1, 1, TRUE), (2, 2, TRUE);
-
--- Sample Discussion
-INSERT INTO discussion_posts (id, problem_id, user_id, title, content) VALUES
-(1, 1, 1, 'Baseline model for Titanic', 'Try a simple logistic regression with Cabin deck simplified to first letter.'),
-(2, 2, 1, 'Feature ideas for price', 'Log-transform SalePrice and add LotArea bins for a quick RMSE win.');
-
-INSERT INTO discussion_comments (id, post_id, parent_id, user_id, content) VALUES
-(1, 1, NULL, 1, 'Standardize numeric columns and you can beat the baseline quickly.'),
-(2, 2, NULL, 1, 'Remember to keep Id ordering identical to public test.');
-
 -- Update sequences to avoid ID conflicts
 SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE((SELECT MAX(id) FROM users), 1));
 SELECT setval(pg_get_serial_sequence('problems', 'id'), COALESCE((SELECT MAX(id) FROM problems), 1));
@@ -291,3 +167,54 @@ SELECT setval(pg_get_serial_sequence('votes', 'id'), COALESCE((SELECT MAX(id) FR
 SELECT setval(pg_get_serial_sequence('subscriptions', 'id'), COALESCE((SELECT MAX(id) FROM subscriptions), 1));
 SELECT setval(pg_get_serial_sequence('payments', 'id'), COALESCE((SELECT MAX(id) FROM payments), 1));
 SELECT setval(pg_get_serial_sequence('invoices', 'id'), COALESCE((SELECT MAX(id) FROM invoices), 1));
+
+-- Create trigger to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_problems_timestamp
+BEFORE UPDATE ON problems
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- Create trigger to cleanup files when problem is deleted
+CREATE OR REPLACE FUNCTION cleanup_problem_files()
+RETURNS TRIGGER AS $$
+DECLARE
+    dataset RECORD;
+    file_path TEXT;
+BEGIN
+    IF OLD.is_deleted = FALSE AND NEW.is_deleted = TRUE THEN
+        -- Delete all submission files first
+        PERFORM pg_notify('cleanup_files',
+            json_build_object(
+                'type', 'submissions',
+                'problem_id', NEW.id
+            )::text
+        );
+        
+        -- Delete problem files
+        FOR dataset IN SELECT * FROM jsonb_array_elements(NEW.datasets)
+        LOOP
+            file_path := dataset->>'path';
+            IF file_path IS NOT NULL THEN
+                PERFORM pg_notify('cleanup_files',
+                    json_build_object(
+                        'type', 'problem_file',
+                        'path', file_path
+                    )::text
+                );
+            END IF;
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_cleanup_problem_files
+AFTER UPDATE ON problems
+FOR EACH ROW EXECUTE FUNCTION cleanup_problem_files();

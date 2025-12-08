@@ -1,471 +1,424 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
 import 'katex/dist/katex.min.css';
 import type { Problem, Tag, Metric, Difficulty, ProblemType } from '../../types';
 import { LoadingSpinner } from '../Common/LoadingSpinner';
-import { 
-    Info, Tag as TagIcon, Upload, Eye, EyeOff, FileCode2, 
-    Save, X, CheckCircle, Database, Layout, Image as ImageIcon
-} from 'lucide-react';
+import { Info, Save, Database, Layout, Image as ImageIcon, FileCode2, Bold, Italic, Link as LinkIcon, Youtube, CheckCircle2 } from 'lucide-react';
 import { api } from '../../api';
 
-// --- TEMPLATES (ĐẦY ĐỦ, KHÔNG VIẾT TẮT) ---
+// --- Constants ---
+const DEFAULT_SCRIPT = `import sys\nimport pandas as pd\nfrom sklearn.metrics import accuracy_score\n\ndef evaluate(submission_path, ground_truth_path, output_path):\n    try:\n        sub_df = pd.read_csv(submission_path)\n        gt_df = pd.read_csv(ground_truth_path)\n        # Logic chấm điểm ở đây\n        # Ví dụ: so sánh cột cuối cùng\n        y_pred = sub_df.iloc[:, -1]\n        y_true = gt_df.iloc[:, -1]\n        score = accuracy_score(y_true, y_pred)\n        with open(output_path, 'w') as f: f.write(str(score))\n    except Exception as e:\n        with open(output_path, 'w') as f: f.write('0.0')\n\nif __name__ == '__main__':\n    # Tham số 1: bài nộp, Tham số 2: ground truth\n    # Lưu ý: Backend truyền 4 tham số, tham số thứ 4 là output path\n    evaluate(sys.argv[1], sys.argv[2], sys.argv[4])`;
 
-const DEFAULT_PYTHON_SCRIPT = `# Python Evaluation Script Template
-import sys
-import pandas as pd
-import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, mean_squared_error
-
-def evaluate(submission_path, ground_truth_path, public_test_path, output_path):
-    """
-    Hàm đánh giá chính.
-    
-    Args:
-        submission_path (str): Đường dẫn tới file dự đoán của thí sinh (submission.csv).
-        ground_truth_path (str): Đường dẫn tới file đáp án bí mật (ground_truth.csv).
-        public_test_path (str): Đường dẫn tới file test public (test.csv) - thường ít dùng trong hàm này.
-        output_path (str): Đường dẫn file để ghi kết quả điểm số (score.txt).
-    """
-    try:
-        # 1. Đọc dữ liệu
-        # Lưu ý: Giả định file CSV có header.
-        sub_df = pd.read_csv(submission_path)
-        gt_df = pd.read_csv(ground_truth_path)
-        
-        # 2. Kiểm tra định dạng cơ bản
-        if 'id' not in sub_df.columns or 'prediction' not in sub_df.columns:
-            raise ValueError("File nộp bài thiếu cột 'id' hoặc 'prediction'.")
-            
-        # Sắp xếp theo ID để đảm bảo khớp dữ liệu
-        sub_df = sub_df.sort_values('id').reset_index(drop=True)
-        gt_df = gt_df.sort_values('id').reset_index(drop=True)
-        
-        if len(sub_df) != len(gt_df):
-            raise ValueError(f"Số lượng dòng không khớp. Kỳ vọng: {len(gt_df)}, Thực tế: {len(sub_df)}")
-
-        # 3. Tính toán điểm số (Metric)
-        # Ví dụ: Tính Accuracy cho bài toán phân loại
-        score = accuracy_score(gt_df['target'], sub_df['prediction'])
-        
-        # Hoặc RMSE cho hồi quy (Bỏ comment để dùng):
-        # score = np.sqrt(mean_squared_error(gt_df['target'], sub_df['prediction']))
-        
-        # 4. Ghi điểm số ra file (BẮT BUỘC)
-        with open(output_path, 'w') as f:
-            f.write(str(score))
-            
-    except Exception as e:
-        # Ghi log lỗi (nếu cần) và trả về điểm 0 trong trường hợp lỗi hệ thống hoặc format
-        # Có thể in ra stderr để debug trên server log
-        print(f"Error evaluating: {str(e)}", file=sys.stderr)
-        with open(output_path, 'w') as f:
-            f.write('0.0')
-
-if __name__ == '__main__':
-    # Không chỉnh sửa 4 dòng dưới đây
-    if len(sys.argv) < 5:
-        print("Usage: python script.py <submission> <ground_truth> <test> <output>", file=sys.stderr)
-        sys.exit(1)
-    evaluate(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-`;
-
-const DEFAULT_MARKDOWN_CONTENT = `# Giới thiệu bài toán
-
-Chào mừng bạn đến với cuộc thi! Dưới đây là mô tả chi tiết về bài toán bạn cần giải quyết.
-
-## 1. Bối cảnh
-Hãy mô tả ngắn gọn về vấn đề thực tế. Ví dụ:
-> "Sự kiện đắm tàu Titanic là một trong những thảm họa hàng hải nổi tiếng nhất lịch sử. Trong bài toán này, bạn cần xây dựng mô hình máy học để dự đoán hành khách nào có khả năng sống sót dựa trên các thông tin như tuổi, giới tính, hạng vé..."
-
-## 2. Mục tiêu
-Mục tiêu của bạn là dự đoán giá trị của cột \`target\` cho mỗi \`id\` trong tập kiểm tra (test set).
-- **Input**: Các đặc trưng (features) của dữ liệu.
-- **Output**: Nhãn dự đoán (0 hoặc 1 cho phân loại, số thực cho hồi quy).
-
-## 3. Thang điểm & Đánh giá
-Bài nộp sẽ được đánh giá dựa trên chỉ số **Accuracy** (Độ chính xác) hoặc **RMSE**.
-$$ Accuracy = \\frac{TP + TN}{TP + TN + FP + FN} $$
-
-## 4. Quy định
-- Không được sử dụng dữ liệu bên ngoài.
-- Mỗi đội được nộp tối đa 10 bài mỗi ngày.
-- Chia sẻ code công khai trong phần Discussion được khuyến khích.
-`;
-
-const DEFAULT_DATA_DESCRIPTION = `# Mô tả dữ liệu
-
-Bộ dữ liệu bao gồm các file sau:
-
-## 1. File cấu trúc
-- **train.csv**: Tập huấn luyện. Chứa các đặc trưng (features) và nhãn mục tiêu (\`target\`).
-- **test.csv**: Tập kiểm tra. Chứa các đặc trưng nhưng **không có** nhãn mục tiêu. Bạn cần dự đoán cho tập này.
-- **sample_submission.csv**: File mẫu định dạng nộp bài.
-
-## 2. Chi tiết các trường dữ liệu (Columns)
-
-| Tên cột | Kiểu dữ liệu | Mô tả chi tiết |
-| :--- | :--- | :--- |
-| \`id\` | Integer | Định danh duy nhất cho mỗi mẫu. |
-| \`Pclass\` | Integer | Hạng vé (1 = Hạng nhất, 2 = Hạng nhì, 3 = Hạng ba). |
-| \`Sex\` | String | Giới tính (male/female). |
-| \`Age\` | Float | Tuổi của hành khách. |
-| \`SibSp\` | Integer | Số lượng anh chị em/vợ chồng đi cùng. |
-| \`Parch\` | Integer | Số lượng bố mẹ/con cái đi cùng. |
-| \`Fare\` | Float | Giá vé. |
-| \`Embarked\`| String | Cổng lên tàu (C = Cherbourg, Q = Queenstown, S = Southampton). |
-
-## 3. Ghi chú quan trọng
-- Cột \`Age\` có một số giá trị bị thiếu (NaN), bạn cần xử lý (ví dụ: điền bằng trung bình hoặc trung vị).
-- Cột \`Cabin\` có rất nhiều giá trị thiếu, hãy cân nhắc khi sử dụng.
-`;
-
-interface ProblemEditorFormProps {
+interface Props {
     initialProblem: Problem | "new";
-    onSave: (
-        data: any, 
-        tagIds: number[],
-        metricIds: number[],
-        files: { trainFile: File | null; testFile: File | null; groundTruthFile: File | null }
-    ) => void;
+    onSave: (data: any, tagIds: number[], metricIds: number[], files: any) => void;
     onCancel: () => void;
     allTags: Tag[];
     allMetrics: Metric[];
     loading: boolean;
 }
 
-export const ProblemEditorForm: React.FC<ProblemEditorFormProps> = ({
-    initialProblem, onSave, onCancel, allTags, allMetrics, loading,
-}) => {
+// --- TÁCH COMPONENT CON RA NGOÀI ĐỂ TRÁNH RE-RENDER ---
+
+interface ToolbarProps {
+    onInsert: (before: string, after?: string) => void;
+    onImageUpload: () => void;
+    onYoutube: () => void;
+}
+
+const Toolbar: React.FC<ToolbarProps> = ({ onInsert, onImageUpload, onYoutube }) => (
+    <div className="flex items-center gap-1 p-2 bg-slate-100 border-b border-slate-200 rounded-t-xl overflow-x-auto">
+        <button type="button" onClick={() => onInsert('**', '**')} className="p-1.5 hover:bg-slate-200 rounded text-slate-600" title="In đậm"><Bold className="w-4 h-4"/></button>
+        <button type="button" onClick={() => onInsert('*', '*')} className="p-1.5 hover:bg-slate-200 rounded text-slate-600" title="In nghiêng"><Italic className="w-4 h-4"/></button>
+        <div className="w-px h-4 bg-slate-300 mx-1"></div>
+        <button type="button" onClick={onImageUpload} className="p-1.5 hover:bg-slate-200 rounded text-slate-600" title="Chèn ảnh"><ImageIcon className="w-4 h-4"/></button>
+        <button type="button" onClick={onYoutube} className="p-1.5 hover:bg-slate-200 rounded text-slate-600" title="Chèn Youtube"><Youtube className="w-4 h-4"/></button>
+        <button type="button" onClick={() => onInsert('[Text]', '(url)')} className="p-1.5 hover:bg-slate-200 rounded text-slate-600" title="Chèn Link"><LinkIcon className="w-4 h-4"/></button>
+    </div>
+);
+
+interface MarkdownEditorProps {
+    value: string;
+    onChange: (val: string) => void;
+    placeholder?: string;
+    onImageUploadReq: (setter: (val: string) => void) => void;
+}
+
+const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange, placeholder, onImageUploadReq }) => {
+    const handleInsert = (before: string, after: string = '') => {
+        onChange(value + `${before}${after}`);
+    };
+
+    const handleYoutube = () => {
+        const url = prompt("Nhập link Youtube (VD: https://www.youtube.com/watch?v=...):");
+        if (url) {
+            const videoId = url.split('v=')[1]?.split('&')[0];
+            if (videoId) {
+                onChange(value + `\n<iframe width="100%" height="400" src="https://www.youtube.com/embed/${videoId}" frameborder="0" allowfullscreen></iframe>\n`);
+            }
+        }
+    };
+
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[500px]">
+            <div className="flex flex-col border border-slate-300 rounded-xl bg-white focus-within:ring-2 focus-within:ring-indigo-500 overflow-hidden">
+                <Toolbar 
+                    onInsert={handleInsert} 
+                    onImageUpload={() => onImageUploadReq((url) => onChange(value + `\n![Image](${url})\n`))}
+                    onYoutube={handleYoutube}
+                />
+                <textarea 
+                    value={value} 
+                    onChange={e => onChange(e.target.value)} 
+                    className="flex-1 p-4 outline-none font-mono text-sm resize-none bg-slate-50/50" 
+                    placeholder={placeholder} 
+                />
+            </div>
+            <div className="h-full overflow-y-auto border rounded-xl p-6 bg-white prose prose-sm max-w-none">
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, rehypeRaw]}>
+                    {value || '*Bản xem trước*'}
+                </ReactMarkdown>
+            </div>
+        </div>
+    );
+};
+
+// --- COMPONENT CHÍNH ---
+
+export const ProblemEditorForm: React.FC<Props> = ({ initialProblem, onSave, onCancel, allTags, allMetrics, loading }) => {
     const isNew = initialProblem === 'new';
+    
+    // State initialization
+    // IMPORTANT: We use useState with a function or initial value, but we also rely on useEffect to update if initialProblem changes late
     const [name, setName] = useState(isNew ? '' : initialProblem.name);
     const [difficulty, setDifficulty] = useState<Difficulty>(isNew ? 'easy' : initialProblem.difficulty);
     const [problemType, setProblemType] = useState<ProblemType>(isNew ? 'classification' : initialProblem.problemType);
-    
-    // Sử dụng Template mặc định nếu là bài mới
-    const [content, setContent] = useState(isNew ? DEFAULT_MARKDOWN_CONTENT : initialProblem.content);
-    const [dataDescription, setDataDescription] = useState(isNew ? DEFAULT_DATA_DESCRIPTION : (initialProblem.dataDescription || DEFAULT_DATA_DESCRIPTION));
-    const [scriptContent, setScriptContent] = useState<string>(isNew ? DEFAULT_PYTHON_SCRIPT : (initialProblem.evaluationScript || DEFAULT_PYTHON_SCRIPT));
-
     const [summary, setSummary] = useState(isNew ? '' : initialProblem.summary || '');
-    const [coverImageUrl, setCoverImageUrl] = useState(isNew ? '' : initialProblem.coverImageUrl || '');
-    const [selectedTagIds, setSelectedTagIds] = useState<number[]>(isNew ? [] : initialProblem.tags || []);
-    const [selectedMetricIds, setSelectedMetricIds] = useState<number[]>(isNew ? [] : initialProblem.metrics || []);
+    const [content, setContent] = useState(isNew ? '## Giới thiệu\nMô tả cuộc thi...' : initialProblem.content);
+    const [dataDescription, setDataDescription] = useState(isNew ? '## Dữ liệu\nChi tiết về tập dữ liệu...' : initialProblem.dataDescription || '');
     
+    // Script: Use default if new or if existing is empty
+    const [scriptContent, setScriptContent] = useState(isNew ? DEFAULT_SCRIPT : (initialProblem.evaluationScript || DEFAULT_SCRIPT));
+    
+    // Files
+    const [coverImageFile, setCoverImageFile] = useState<File | null>(null);
+    const [coverImageUrl, setCoverImageUrl] = useState(isNew ? '' : initialProblem.coverImageUrl || '');
     const [trainFile, setTrainFile] = useState<File | null>(null);
     const [testFile, setTestFile] = useState<File | null>(null);
-    const [groundTruthFile, setGroundTruthFile] = useState<File | null>(null);
+    const [gtFile, setGtFile] = useState<File | null>(null);
+
+    // Meta
+    const [selectedTagIds, setSelectedTagIds] = useState<number[]>(isNew ? [] : initialProblem.tags);
+    const [selectedMetricIds, setSelectedMetricIds] = useState<number[]>(isNew ? [] : initialProblem.metrics);
     
+    // UI
     const [activeTab, setActiveTab] = useState<'overview' | 'data' | 'evaluation' | 'meta'>('overview');
     const [tagSearch, setTagSearch] = useState('');
-    const [uploadingImg, setUploadingImg] = useState(false);
     
-    const scriptFileReaderRef = useRef<HTMLInputElement>(null);
+    const scriptInputRef = useRef<HTMLInputElement>(null);
     const imageUploadRef = useRef<HTMLInputElement>(null);
+    const [pendingImageInsert, setPendingImageInsert] = useState<((url: string) => void) | null>(null);
 
-    const availableTags = useMemo(() => {
-        return allTags.filter(t => !selectedTagIds.includes(t.id) && t.name.toLowerCase().includes(tagSearch.toLowerCase()));
-    }, [allTags, selectedTagIds, tagSearch]);
-
-    const handleScriptFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (ev) => { if (typeof ev.target?.result === 'string') setScriptContent(ev.target.result); };
-            reader.readAsText(file);
+    // --- Sync State when initialProblem changes (loaded from API) ---
+    useEffect(() => {
+        if (initialProblem !== 'new') {
+            setName(initialProblem.name || '');
+            setDifficulty(initialProblem.difficulty || 'easy');
+            setProblemType(initialProblem.problemType || 'classification');
+            setSummary(initialProblem.summary || '');
+            setContent(initialProblem.content || '');
+            
+            // Explicitly sync data description and script
+            if (initialProblem.dataDescription) setDataDescription(initialProblem.dataDescription);
+            if (initialProblem.evaluationScript) setScriptContent(initialProblem.evaluationScript);
+            
+            setCoverImageUrl(initialProblem.coverImageUrl || '');
+            setSelectedTagIds(initialProblem.tags || []);
+            setSelectedMetricIds(initialProblem.metrics || []);
         }
-        e.target.value = '';
+    }, [initialProblem]);
+
+    // Check if dataset exists on server
+    const hasDatasetOnServer = (split: string) => {
+        if (isNew || !initialProblem || initialProblem === 'new' || !initialProblem.datasets) return false;
+        // Check dataset array from backend
+        return initialProblem.datasets.some(d => d.split === split);
     };
 
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Special check for ground truth which might be stored differently in older versions but unified now
+    const hasGroundTruthOnServer = () => {
+         if (isNew || !initialProblem || initialProblem === 'new') return false;
+         // Check both the datasets array OR the hasGroundTruth flag from API
+         return initialProblem.hasGroundTruth || initialProblem.datasets?.some(d => d.split === 'ground_truth');
+    };
+
+    const handleCoverImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (!file) return;
-
-        setUploadingImg(true);
-        const formData = new FormData();
-        formData.append('image', file);
-
-        try {
-            const res = await api.post('/media/upload', formData);
-            if (res?.url) {
-                const imgMarkdown = `\n![${file.name}](${res.url})\n`;
-                if (activeTab === 'data') {
-                    setDataDescription(prev => prev + imgMarkdown);
-                } else {
-                    setContent(prev => prev + imgMarkdown);
-                }
-            }
-        } catch (err) {
-            console.error("Upload failed", err);
-            alert("Upload ảnh thất bại. Vui lòng thử lại.");
-        } finally {
-            setUploadingImg(false);
-            e.target.value = '';
+        if (file) {
+            setCoverImageFile(file);
+            setCoverImageUrl(URL.createObjectURL(file));
         }
+    };
+
+    const handleEditorImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file && pendingImageInsert) {
+            try {
+                const formData = new FormData();
+                formData.append('image', file);
+                const res = await api.post('/media/upload', formData);
+                if (res?.url) {
+                    pendingImageInsert(res.url);
+                }
+            } catch (err) {
+                alert("Upload ảnh thất bại.");
+            }
+        }
+        e.target.value = '';
+        setPendingImageInsert(null);
+    };
+
+    const triggerEditorImageUpload = (insertCallback: (url: string) => void) => {
+        setPendingImageInsert(() => insertCallback);
+        imageUploadRef.current?.click();
     };
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        onSave({ 
-            name, difficulty, problemType, content, summary, coverImageUrl, 
-            dataDescription, 
-            evaluationScriptContent: scriptContent 
-        }, selectedTagIds, selectedMetricIds, { trainFile, testFile, groundTruthFile });
+        onSave(
+            { 
+                name, difficulty, problemType, content, summary, 
+                dataDescription, 
+                evaluationScriptContent: scriptContent, 
+                coverImageUrl: isNew ? null : coverImageUrl 
+            },
+            selectedTagIds,
+            selectedMetricIds,
+            { trainFile, testFile, groundTruthFile: gtFile, coverImage: coverImageFile }
+        );
     };
 
-    const MarkdownEditorWithPreview = ({ value, onChange, placeholder }: { value: string, onChange: (s: string) => void, placeholder: string }) => (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px]">
-            <div className="flex flex-col h-full relative group">
-                 <div className="absolute top-2 right-2 flex gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button 
-                        type="button"
-                        onClick={() => imageUploadRef.current?.click()}
-                        disabled={uploadingImg}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg shadow-sm hover:bg-slate-50 text-slate-600 text-xs font-medium"
-                        title="Chèn ảnh"
-                    >
-                        {uploadingImg ? <LoadingSpinner size="sm"/> : <ImageIcon className="w-4 h-4"/>}
-                        Chèn ảnh
-                    </button>
-                 </div>
-                <textarea 
-                    value={value} 
-                    onChange={(e) => onChange(e.target.value)} 
-                    className="flex-1 w-full p-4 pt-10 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-sm resize-none leading-relaxed" 
-                    placeholder={placeholder} 
-                />
-            </div>
-            <div className="h-full overflow-y-auto border border-slate-200 rounded-xl p-6 bg-white prose prose-slate prose-sm max-w-none shadow-sm">
-                {value ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                        {value}
-                    </ReactMarkdown>
-                ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400 italic">
-                        <EyeOff className="w-8 h-8 mb-2 opacity-50"/>
-                        <span>Bản xem trước sẽ hiện ở đây...</span>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-
-    const TabButton = ({ id, label, icon: Icon }: { id: typeof activeTab, label: string, icon: any }) => (
-        <button
-            type="button"
-            onClick={() => setActiveTab(id)}
-            className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-all duration-200 border-b-2 ${
-                activeTab === id 
-                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50' 
-                : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-            }`}
-        >
-            <Icon className={`w-4 h-4 ${activeTab === id ? 'text-indigo-600' : 'text-slate-400'}`} />
-            {label}
-        </button>
-    );
-
-    const FileUploadBox = ({ label, description, fileState, setFile, required, isUpdateAndExisting }: any) => (
-        <div className={`relative border-2 border-dashed rounded-xl p-6 transition-all duration-200 group ${fileState ? 'border-emerald-400 bg-emerald-50/30' : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50'}`}>
-            <div className="flex items-start justify-between">
-                <div className="flex-1">
-                    <label className="block text-sm font-bold text-slate-800 mb-1 group-hover:text-indigo-700 transition-colors">
-                        {label} {required && <span className="text-red-500">*</span>}
-                    </label>
-                    <p className="text-xs text-slate-500 mb-3 leading-relaxed">{description}</p>
-                    
-                    <div className="flex items-center gap-3">
-                        <label className="cursor-pointer">
-                            <span className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-slate-200 shadow-sm text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-indigo-600 hover:border-indigo-300 transition-all">
-                                <Upload className="w-4 h-4" /> Chọn File
-                            </span>
-                            <input type="file" accept=".csv" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-                        </label>
-                        {fileState ? (
-                            <span className="text-sm text-emerald-600 font-medium flex items-center gap-1 animate-fade-in">
-                                <CheckCircle className="w-4 h-4" /> {fileState.name}
-                            </span>
-                        ) : isUpdateAndExisting ? (
-                            <span className="text-sm text-slate-500 italic flex items-center gap-1">
-                                <Database className="w-4 h-4" /> Đã có trên server
-                            </span>
-                        ) : (
-                            <span className="text-sm text-slate-400 italic">Chưa chọn file</span>
-                        )}
-                    </div>
-                </div>
-            </div>
-            {fileState && (
-                <button type="button" onClick={() => setFile(null)} className="absolute top-2 right-2 p-1 text-slate-400 hover:text-red-500 transition-colors">
-                    <X className="w-4 h-4" />
-                </button>
-            )}
-        </div>
-    );
+    const filteredTags = useMemo(() => allTags.filter(t => !selectedTagIds.includes(t.id) && t.name.toLowerCase().includes(tagSearch.toLowerCase())), [allTags, selectedTagIds, tagSearch]);
 
     return (
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-             <input type="file" ref={imageUploadRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
+            <input type="file" ref={imageUploadRef} hidden accept="image/*" onChange={handleEditorImageFileChange} />
 
-            <div className="flex border-b border-slate-200 bg-white sticky top-0 z-20 px-4">
-                <TabButton id="overview" label="Tổng quan" icon={Layout} />
-                <TabButton id="data" label="Dữ liệu" icon={Database} />
-                <TabButton id="evaluation" label="Đánh giá (Script)" icon={FileCode2} />
-                <TabButton id="meta" label="Cài đặt khác" icon={TagIcon} />
+            <div className="flex border-b overflow-x-auto">
+                {[
+                    { id: 'overview', label: 'Tổng quan', icon: Layout },
+                    { id: 'data', label: 'Dữ liệu', icon: Database },
+                    { id: 'evaluation', label: 'Code chấm điểm', icon: FileCode2 },
+                    { id: 'meta', label: 'Cài đặt', icon: Info }
+                ].map(t => (
+                    <button 
+                        key={t.id} 
+                        type="button"
+                        onClick={() => setActiveTab(t.id as any)}
+                        className={`flex items-center gap-2 px-6 py-4 font-medium transition-colors border-b-2 whitespace-nowrap ${activeTab === t.id ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
+                    >
+                        <t.icon className="w-4 h-4"/> {t.label}
+                    </button>
+                ))}
             </div>
 
-            <div className="p-6 md:p-8 min-h-[500px]">
-                {/* TAB: OVERVIEW */}
+            <div className="p-8">
                 {activeTab === 'overview' && (
-                    <div className="space-y-8 animate-fade-in">
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                            <div className="lg:col-span-2 space-y-4">
+                    <div className="space-y-6">
+                        <div className="grid gap-6 md:grid-cols-2">
+                            <div className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-bold text-slate-800 mb-1">Tên bài toán <span className="text-red-500">*</span></label>
-                                    <input value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-lg font-semibold" placeholder="VD: Titanic Survival Prediction" />
+                                    <label className="block text-sm font-bold text-slate-700 mb-1">Tên cuộc thi</label>
+                                    <input value={name} onChange={e => setName(e.target.value)} className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="VD: Dự đoán giá nhà..." required />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-bold text-slate-800 mb-1">Mô tả ngắn</label>
-                                    <input value={summary} onChange={(e) => setSummary(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm" placeholder="Mô tả ngắn gọn hiển thị trên thẻ..." />
+                                    <label className="block text-sm font-bold text-slate-700 mb-1">Mô tả ngắn</label>
+                                    <input value={summary} onChange={e => setSummary(e.target.value)} className="w-full p-3 border rounded-lg outline-none" placeholder="Tóm tắt ngắn gọn..." />
                                 </div>
-                            </div>
-                            <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-4">
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Độ khó</label>
-                                    <div className="flex gap-2">
-                                        {(['easy', 'medium', 'hard'] as const).map(d => (
-                                            <button key={d} type="button" onClick={() => setDifficulty(d)} className={`flex-1 py-1.5 text-sm font-medium rounded-md border capitalize transition-all ${difficulty === d ? 'bg-white border-indigo-500 text-indigo-700 shadow-sm ring-1 ring-indigo-500' : 'bg-transparent border-slate-300 text-slate-600 hover:bg-white'}`}>{d}</button>
-                                        ))}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-1">Độ khó</label>
+                                        <select value={difficulty} onChange={e => setDifficulty(e.target.value as any)} className="w-full p-3 border rounded-lg outline-none bg-white">
+                                            <option value="easy">Dễ</option>
+                                            <option value="medium">Trung bình</option>
+                                            <option value="hard">Khó</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-1">Loại bài toán</label>
+                                        <select value={problemType} onChange={e => setProblemType(e.target.value as any)} className="w-full p-3 border rounded-lg outline-none bg-white">
+                                            <option value="classification">Phân loại</option>
+                                            <option value="regression">Hồi quy</option>
+                                        </select>
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Loại bài toán</label>
-                                    <select value={problemType} onChange={(e) => setProblemType(e.target.value as any)} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none">
-                                        <option value="classification">Phân loại</option>
-                                        <option value="regression">Hồi quy</option>
-                                        <option value="other">Khác</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Ảnh bìa (URL)</label>
-                                    <input value={coverImageUrl} onChange={(e) => setCoverImageUrl(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none" placeholder="https://..." />
-                                </div>
                             </div>
-                        </div>
-
-                        <div className="border-t border-slate-200 pt-6">
-                            <label className="block text-sm font-bold text-slate-800 mb-2">Chi tiết bài toán (Markdown)</label>
-                            <MarkdownEditorWithPreview value={content} onChange={setContent} placeholder="Mô tả chi tiết bài toán..." />
-                        </div>
-                    </div>
-                )}
-
-                {/* TAB: DATA */}
-                {activeTab === 'data' && (
-                    <div className="space-y-8 animate-fade-in">
-                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                            <div className="lg:col-span-1 space-y-4">
-                                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 mb-4">
-                                    <h5 className="flex items-center gap-2 text-sm font-bold text-blue-800 mb-1"><Info className="w-4 h-4"/> Lưu ý file</h5>
-                                    <p className="text-xs text-blue-700">Chỉ chấp nhận file <strong>.csv</strong>. File Ground Truth dùng để chấm điểm và được bảo mật tuyệt đối.</p>
-                                </div>
-                                <h4 className="font-bold text-slate-800">Upload File</h4>
-                                <FileUploadBox label="Train Data (Public)" description="Dữ liệu huấn luyện có nhãn." fileState={trainFile} setFile={setTrainFile} required={isNew} isUpdateAndExisting={!isNew} />
-                                <FileUploadBox label="Test Data (Public)" description="Dữ liệu kiểm tra không nhãn." fileState={testFile} setFile={setTestFile} required={isNew} isUpdateAndExisting={!isNew} />
-                                <FileUploadBox label="Ground Truth (Hidden)" description="Đáp án đúng (bí mật)." fileState={groundTruthFile} setFile={setGroundTruthFile} required={isNew} isUpdateAndExisting={!isNew && initialProblem.hasGroundTruth} />
-                            </div>
-                            
-                            <div className="lg:col-span-2 flex flex-col h-full">
-                                <h4 className="font-bold text-slate-800 mb-2">Mô tả Dữ liệu (Markdown & LaTeX)</h4>
-                                <div className="flex-1 min-h-[400px]">
-                                     <MarkdownEditorWithPreview 
-                                        value={dataDescription} 
-                                        onChange={setDataDescription} 
-                                        placeholder="Mô tả chi tiết về dữ liệu..." 
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* TAB: EVALUATION */}
-                {activeTab === 'evaluation' && (
-                    <div className="animate-fade-in h-[600px] flex flex-col">
-                         <div className="flex justify-between items-end mb-4">
                             <div>
-                                <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                                    <FileCode2 className="w-4 h-4 text-indigo-600" /> Evaluation Script (Python)
-                                </label>
-                                <p className="text-xs text-slate-500 mt-1">Hàm <code>evaluate</code> dùng để chấm điểm submission.</p>
+                                <label className="block text-sm font-bold text-slate-700 mb-1">Ảnh bìa</label>
+                                <div className="border-2 border-dashed rounded-xl h-64 flex flex-col items-center justify-center relative bg-slate-50 overflow-hidden group">
+                                    {coverImageUrl ? (
+                                        <>
+                                            <img src={coverImageUrl} alt="Cover" className="w-full h-full object-cover" />
+                                            <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <p className="text-white font-medium">Nhấn để thay đổi</p>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <div className="text-center p-6">
+                                            <ImageIcon className="w-10 h-10 text-slate-400 mx-auto mb-2" />
+                                            <p className="text-sm text-slate-500">Upload ảnh bìa (JPG, PNG)</p>
+                                        </div>
+                                    )}
+                                    <input type="file" accept="image/*" onChange={handleCoverImageChange} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                </div>
                             </div>
-                            <button type="button" onClick={() => scriptFileReaderRef.current?.click()} className="text-sm px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 hover:text-indigo-600 transition font-medium flex items-center gap-2 shadow-sm">
-                                <Upload className="w-4 h-4"/> Upload .py
-                            </button>
-                            <input type="file" ref={scriptFileReaderRef} className="hidden" accept=".py,.txt" onChange={handleScriptFileChange}/>
                         </div>
-                        <div className="relative flex-1 rounded-xl overflow-hidden border border-slate-700 shadow-inner bg-[#1e1e1e]">
-                            <textarea value={scriptContent} onChange={(e) => setScriptContent(e.target.value)} className="absolute inset-0 w-full h-full p-4 bg-transparent text-slate-200 font-mono text-sm leading-relaxed resize-none focus:outline-none" spellCheck={false} />
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Chi tiết cuộc thi (Markdown)</label>
+                            <MarkdownEditor 
+                                value={content} 
+                                onChange={setContent} 
+                                placeholder="Mô tả chi tiết..." 
+                                onImageUploadReq={triggerEditorImageUpload}
+                            />
                         </div>
                     </div>
                 )}
 
-                {/* TAB: META */}
+                {activeTab === 'data' && (
+                    <div className="space-y-6">
+                        <div className="grid md:grid-cols-3 gap-6">
+                            <div className="space-y-4">
+                                <h4 className="font-bold text-slate-800">File dữ liệu (CSV)</h4>
+                                
+                                <div className="border rounded-lg p-4 bg-slate-50">
+                                    <label className="block text-sm font-semibold mb-2 flex justify-between">
+                                        Train Set (Public)
+                                        {hasDatasetOnServer('train') && <span className="text-emerald-600 text-xs flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Đã có trên server</span>}
+                                    </label>
+                                    <div className="relative">
+                                        <input type="file" accept=".csv" onChange={e => setTrainFile(e.target.files?.[0] || null)} className="absolute inset-0 opacity-0 cursor-pointer w-full z-10" />
+                                        <div className={`px-4 py-2 border rounded bg-white text-sm truncate ${trainFile ? 'text-indigo-600 border-indigo-200 bg-indigo-50' : 'text-slate-500'}`}>
+                                            {trainFile ? trainFile.name : (hasDatasetOnServer('train') ? 'Giữ nguyên file cũ (Tải lên để thay thế)' : 'Chọn file...')}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="border rounded-lg p-4 bg-slate-50">
+                                    <label className="block text-sm font-semibold mb-2 flex justify-between">
+                                        Test Set (Public)
+                                        {hasDatasetOnServer('public_test') && <span className="text-emerald-600 text-xs flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Đã có trên server</span>}
+                                    </label>
+                                    <div className="relative">
+                                        <input type="file" accept=".csv" onChange={e => setTestFile(e.target.files?.[0] || null)} className="absolute inset-0 opacity-0 cursor-pointer w-full z-10" />
+                                        <div className={`px-4 py-2 border rounded bg-white text-sm truncate ${testFile ? 'text-indigo-600 border-indigo-200 bg-indigo-50' : 'text-slate-500'}`}>
+                                            {testFile ? testFile.name : (hasDatasetOnServer('public_test') ? 'Giữ nguyên file cũ (Tải lên để thay thế)' : 'Chọn file...')}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="border rounded-lg p-4 bg-slate-50">
+                                    <label className="block text-sm font-semibold mb-2 flex justify-between">
+                                        Ground Truth (Hidden)
+                                        {hasGroundTruthOnServer() && <span className="text-emerald-600 text-xs flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Đã có trên server</span>}
+                                    </label>
+                                    <div className="relative">
+                                        <input type="file" accept=".csv" onChange={e => setGtFile(e.target.files?.[0] || null)} className="absolute inset-0 opacity-0 cursor-pointer w-full z-10" />
+                                        <div className={`px-4 py-2 border rounded bg-white text-sm truncate ${gtFile ? 'text-indigo-600 border-indigo-200 bg-indigo-50' : 'text-slate-500'}`}>
+                                            {gtFile ? gtFile.name : (hasGroundTruthOnServer() ? 'Giữ nguyên file cũ (Tải lên để thay thế)' : 'Chọn file...')}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Mô tả dữ liệu (Markdown)</label>
+                                <MarkdownEditor 
+                                    value={dataDescription} 
+                                    onChange={setDataDescription} 
+                                    placeholder="Giải thích các cột dữ liệu..."
+                                    onImageUploadReq={triggerEditorImageUpload}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'evaluation' && (
+                    <div className="h-[500px] flex flex-col">
+                        <div className="flex justify-between items-center mb-2">
+                            <label className="font-bold text-slate-700 flex items-center gap-2">
+                                Script chấm điểm (Python)
+                                {!isNew && <span className="text-xs font-normal text-slate-500">(Hiện đang sử dụng script trên server)</span>}
+                            </label>
+                            <button type="button" onClick={() => scriptInputRef.current?.click()} className="text-xs bg-slate-100 px-3 py-1 rounded hover:bg-slate-200 font-medium">Upload .py</button>
+                            <input ref={scriptInputRef} type="file" accept=".py" className="hidden" onChange={e => {
+                                const f = e.target.files?.[0];
+                                if(f) { const r = new FileReader(); r.onload=ev=>setScriptContent(ev.target?.result as string); r.readAsText(f); }
+                            }}/>
+                        </div>
+                        <div className="flex-1 relative">
+                             <textarea 
+                                value={scriptContent} 
+                                onChange={e => setScriptContent(e.target.value)} 
+                                className="w-full h-full bg-slate-900 text-slate-200 p-4 rounded-xl font-mono text-sm resize-none leading-relaxed focus:ring-2 focus:ring-indigo-500 outline-none" 
+                                spellCheck={false} 
+                            />
+                        </div>
+                    </div>
+                )}
+
                 {activeTab === 'meta' && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10 animate-fade-in">
-                        <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
-                            <h3 className="font-bold text-slate-800 mb-4">Metrics (Chỉ số)</h3>
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
+                    <div className="grid md:grid-cols-2 gap-8">
+                        <div>
+                            <h4 className="font-bold mb-4">Chỉ số đánh giá (Metrics)</h4>
+                            <div className="space-y-2 border rounded-xl p-4 h-64 overflow-y-auto">
                                 {allMetrics.map(m => (
-                                    <label key={m.id} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border ${selectedMetricIds.includes(m.id) ? 'bg-white border-indigo-200 shadow-sm' : 'hover:bg-white border-transparent'}`}>
-                                        <input type="checkbox" checked={selectedMetricIds.includes(m.id)} onChange={(e) => { const s = new Set(selectedMetricIds); e.target.checked ? s.add(m.id) : s.delete(m.id); setSelectedMetricIds(Array.from(s)); }} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
-                                        <div className="flex-1">
-                                            <span className="text-sm font-medium text-slate-700 block">{m.key}</span>
-                                            <span className="text-xs text-slate-400 uppercase">{m.direction}</span>
+                                    <label key={m.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded cursor-pointer">
+                                        <input type="checkbox" checked={selectedMetricIds.includes(m.id)} onChange={e => {
+                                            const s = new Set(selectedMetricIds); e.target.checked ? s.add(m.id) : s.delete(m.id); setSelectedMetricIds(Array.from(s));
+                                        }} className="rounded text-indigo-600" />
+                                        <div>
+                                            <div className="font-medium text-sm">{m.key}</div>
+                                            <div className="text-xs text-slate-500 uppercase">{m.direction}</div>
                                         </div>
                                     </label>
                                 ))}
                             </div>
                         </div>
-                        <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
-                            <h3 className="font-bold text-slate-800 mb-4">Tags</h3>
-                             <div className="mb-4">
-                                <input value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="Tìm kiếm tag..." className="w-full px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none" />
-                            </div>
-                            <div className="flex flex-wrap gap-2 mb-6">
+                        <div>
+                            <h4 className="font-bold mb-4">Tags</h4>
+                            <div className="flex flex-wrap gap-2 mb-4">
                                 {selectedTagIds.map(id => {
-                                    const tag = allTags.find(t => t.id === id);
-                                    if (!tag) return null;
-                                    return (
-                                        <span key={id} className="inline-flex items-center px-3 py-1 rounded-full bg-indigo-100 text-indigo-700 text-sm font-medium border border-indigo-200">
-                                            {tag.name}
-                                            <button type="button" onClick={() => setSelectedTagIds(ids => ids.filter(i => i !== id))} className="ml-2 hover:text-indigo-900">×</button>
+                                    const t = allTags.find(at => at.id === id);
+                                    return t ? (
+                                        <span key={id} className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm flex items-center gap-1">
+                                            {t.name} <button type="button" onClick={() => setSelectedTagIds(ids => ids.filter(i => i !== id))} className="hover:text-indigo-900">×</button>
                                         </span>
-                                    )
+                                    ) : null;
                                 })}
                             </div>
-                             <div className="border-t border-slate-200 pt-4">
-                                <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Gợi ý</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {availableTags.slice(0, 10).map(tag => (
-                                        <button key={tag.id} type="button" onClick={() => { setSelectedTagIds([...selectedTagIds, tag.id]); setTagSearch(''); }} className="px-3 py-1 rounded-full bg-white border border-slate-300 text-slate-600 text-sm hover:border-indigo-400 hover:text-indigo-600 transition-colors">
-                                            + {tag.name}
-                                        </button>
-                                    ))}
-                                </div>
+                            <input value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="Tìm tag..." className="w-full p-2 border rounded mb-2" />
+                            <div className="flex flex-wrap gap-2">
+                                {filteredTags.slice(0, 8).map(t => (
+                                    <button type="button" key={t.id} onClick={() => {setSelectedTagIds([...selectedTagIds, t.id]); setTagSearch('')}} className="px-3 py-1 border rounded-full text-sm hover:bg-slate-50">
+                                        + {t.name}
+                                    </button>
+                                ))}
                             </div>
                         </div>
                     </div>
                 )}
             </div>
 
-            <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-4 sticky bottom-0 z-20">
-                <button type="button" onClick={onCancel} disabled={loading} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-700 font-semibold hover:bg-white transition-all">Hủy</button>
-                <button type="submit" disabled={loading} className="px-6 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 shadow-md transition-all flex items-center gap-2">
-                    {loading ? <LoadingSpinner size="sm" color="white"/> : <><Save className="w-4 h-4" /> Lưu bài toán</>}
+            <div className="p-4 bg-slate-50 border-t flex justify-end gap-3">
+                <button type="button" onClick={onCancel} className="px-6 py-2 rounded-lg border bg-white text-slate-700 hover:bg-slate-100 font-medium">Hủy</button>
+                <button type="submit" disabled={loading} className="px-6 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 font-medium flex items-center gap-2">
+                    {loading ? <LoadingSpinner size="sm" color="white"/> : <><Save className="w-4 h-4"/> Lưu cuộc thi</>}
                 </button>
             </div>
         </form>

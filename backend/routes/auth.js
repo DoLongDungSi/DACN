@@ -1,6 +1,6 @@
 // backend/routes/auth.js
 const express = require('express');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs'); // FIX: Đổi từ 'bcrypt' sang 'bcryptjs' để khớp với package.json
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { SALT_ROUNDS, JWT_SECRET, OWNER_ID } = require('../config/constants');

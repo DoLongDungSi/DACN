@@ -1,85 +1,88 @@
-import React from 'react';
-import { useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
-import { LayoutDashboard, Trophy, FileCode, MessageSquare, Settings, Shield } from 'lucide-react';
+import { LayoutDashboard, Trophy, FileText, User, Settings, Shield, Menu } from 'lucide-react';
 import type { Page } from '../types';
 
-interface SidebarProps {
-    onCloseMobile?: () => void;
-}
+const navItems: Array<{ page: Page; label: string; icon: React.ReactNode }> = [
+  { page: 'problems', label: 'Cuộc thi', icon: <Trophy className="w-5 h-5" /> },
+  { page: 'my-submissions', label: 'Bài nộp', icon: <FileText className="w-5 h-5" /> },
+  { page: 'profile', label: 'Hồ sơ', icon: <User className="w-5 h-5" /> },
+  { page: 'settings', label: 'Cài đặt', icon: <Settings className="w-5 h-5" /> },
+];
 
-export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
-    const { currentUser, navigate } = useAppContext();
-    const location = useLocation();
+export const Sidebar: React.FC = () => {
+  const { currentUser, page, navigate } = useAppContext();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-    const navItems = [
-        { id: 'problems', label: 'Cuộc thi', icon: Trophy, path: '/problems' },
-        { id: 'leaderboard', label: 'Bảng xếp hạng', icon: LayoutDashboard, path: '/leaderboard' }, // Placeholder logic handled in navigate
-        { id: 'discussion', label: 'Thảo luận', icon: MessageSquare, path: '/discussion' }, // Placeholder
-        { id: 'my-submissions', label: 'Code & Bài nộp', icon: FileCode, path: '/my-submissions' },
-    ];
+  const handleNavigate = (targetPage: Page) => {
+    navigate(targetPage);
+    setMobileOpen(false);
+  };
 
-    const isActive = (id: string) => {
-        if (id === 'problems' && (location.pathname === '/problems' || location.pathname === '/')) return true;
-        return location.pathname.includes(id);
-    };
+  return (
+    <>
+      <button className="lg:hidden fixed top-4 left-4 z-50 bg-white p-2 rounded-xl shadow-md border" onClick={() => setMobileOpen(true)}>
+        <Menu className="w-6 h-6 text-slate-700" />
+      </button>
 
-    const handleItemClick = (id: string) => {
-        // Mapping basic IDs to Page types used in navigate
-        if (id === 'leaderboard') {
-             // If leaderboard isn't a main page yet, redirect to problems or show toast
-             // For now mapping to problems for demo if page doesn't exist
-             navigate('problems'); 
-        } else if (id === 'discussion') {
-             navigate('problems'); // Placeholder
-        } else {
-            navigate(id as Page);
-        }
+      <aside className={`fixed lg:static inset-0 z-40 w-64 bg-white border-r border-slate-200 transform transition-transform duration-300 ease-in-out ${mobileOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 h-screen flex flex-col`}>
+        <div className="p-6 border-b border-slate-100">
+          <h2 className="text-2xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-violet-600 flex items-center gap-2">
+            <LayoutDashboard className="w-8 h-8 text-indigo-600" /> MLJudge
+          </h2>
+        </div>
         
-        if (onCloseMobile) onCloseMobile();
-    };
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {navItems.map((item) => (
+            <button
+              key={item.page}
+              onClick={() => handleNavigate(item.page)}
+              className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-bold transition-all group ${
+                page === item.page || (item.page === 'problems' && page === 'problem-detail')
+                  ? 'bg-indigo-50 text-indigo-600 shadow-sm border border-indigo-100'
+                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <span className={`mr-3 transition-colors ${page === item.page ? 'text-indigo-600' : 'text-slate-400 group-hover:text-slate-600'}`}>{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
 
-    return (
-        <nav className="space-y-1">
-            <div className="px-3 mb-2">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Menu</p>
-            </div>
-            
-            {navItems.map((item) => (
-                <button
-                    key={item.id}
-                    onClick={() => handleItemClick(item.id)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-full text-sm font-medium transition-all ${
-                        isActive(item.id)
-                            ? 'bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-200'
-                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}
-                >
-                    <item.icon className={`w-5 h-5 ${isActive(item.id) ? 'text-indigo-600' : 'text-slate-400'}`} />
-                    {item.label}
-                </button>
-            ))}
-
-            <div className="my-4 border-t border-slate-100" />
-
-            {currentUser?.role === 'owner' && (
-                <>
-                    <div className="px-3 mb-2">
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Admin</p>
-                    </div>
-                    <button
-                        onClick={() => { navigate('admin'); if(onCloseMobile) onCloseMobile(); }}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-full text-sm font-medium transition-all ${
-                            location.pathname === '/admin'
-                                ? 'bg-slate-800 text-white shadow-md'
-                                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
-                    >
-                        <Shield className="w-5 h-5" />
-                        Quản trị hệ thống
-                    </button>
-                </>
-            )}
+          {currentUser?.role === 'owner' && (
+            <>
+              <div className="my-4 border-t border-slate-100 mx-2" />
+              <button
+                onClick={() => handleNavigate('admin')}
+                className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-bold transition-all group ${
+                  page === 'admin'
+                    ? 'bg-slate-900 text-white shadow-md'
+                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <Shield className="w-5 h-5 mr-3" />
+                Quản trị viên
+              </button>
+            </>
+          )}
         </nav>
-    );
+        
+        {/* User Mini Profile (Optional footer) */}
+        {currentUser && (
+            <div className="p-4 border-t border-slate-100 bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${currentUser.avatarColor || 'bg-slate-400'}`}>
+                        {currentUser.username[0].toUpperCase()}
+                    </div>
+                    <div className="overflow-hidden">
+                        <p className="text-sm font-bold text-slate-800 truncate">{currentUser.username}</p>
+                        <p className="text-xs text-slate-500 truncate capitalize">{currentUser.role}</p>
+                    </div>
+                </div>
+            </div>
+        )}
+      </aside>
+
+      {mobileOpen && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30 lg:hidden" onClick={() => setMobileOpen(false)} />}
+    </>
+  );
 };

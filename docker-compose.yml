@@ -1,85 +1,81 @@
+version: '3.8'
+
 services:
-  frontend:    
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:80"
-    environment:
-      VITE_API_BASE_URL: /api
-    depends_on:
-      backend:
-        condition: service_started
-
-  backend:    
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    build:
-      context: ./backend
-    ports:
-      - "5001:5001"
-    environment:
-      DATABASE_URL: postgresql://myuser:mypassword@db:5432/mydatabase
-      JWT_SECRET: '8er3y2678etrb7326bte93r765etr356vre45r476e5r36e8r3796er673rt76'
-      # FRONTEND_URL: https://0zfxt8b3-3000.asse.devtunnels.ms/
-      FRONTEND_URL: http://localhost:3000
-      EVALUATION_SERVICE_URL: http://microservice:5002/evaluate 
-      # PORT: 5001
-      NODE_ENV: development
-      # OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-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}
-      # OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3-4b:free}
-      OPENROUTER_API_KEY: 
-      OPENROUTER_MODEL: x-ai/grok-4.1-fast:free
-      HINT_SYSTEM_PROMPT: Bạn là một chuyên gia AI mento. Hãy đưa ra gợi ý ngắn gọn, súc tích về cách giải quyết bài toán này mà không đưa ra code lời giải trực tiếp. Tập trung vào feature engineering và model selection.
-    depends_on:
-      db:
-        condition: service_healthy
-      microservice: 
-        condition: service_started
-    volumes:
-        - ./backend:/usr/src/app
-        - /usr/src/app/node_modules 
-        - ./db/data:/usr/src/app/db/data
-        - ./test:/usr/src/test:ro
-    command: npm start 
-
-  microservice:
-    build:
-      context: ./microservice
-      dockerfile: Dockerfile
-    ports:
-      - "5002:5002"
-    environment:
-      FLASK_ENV: development
-    volumes:
-       - ./microservice:/app
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 5
-
   db:
-    image: postgres:13-alpine
-    restart: always
+    image: postgres:15-alpine
+    container_name: dacn_db
     environment:
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
-      POSTGRES_DB: mydatabase
-    ports:
-      - "5433:5432"
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mljudge
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U myuser -d mydatabase"]
+      test: ["CMD-SHELL", "pg_isready -U user -d mljudge"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  backend:
+    build: ./backend
+    container_name: dacn_backend
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/mljudge
+      DB_HOST: db
+      DB_USER: user
+      DB_PASS: password
+      DB_NAME: mljudge
+      JWT_SECRET: your_secret_key_change_this
+      DATA_ROOT: /db/data
+      EVALUATION_SERVICE_URL: http://microservice:5002/evaluate
+      NODE_ENV: production
+      PORT: 5001
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.0-flash-lite-preview-02-05:free}
+      HINT_SYSTEM_PROMPT: ${HINT_SYSTEM_PROMPT:-You are a helpful AI assistant specialized in Data Science.}
+    volumes:
+      - ./db/data:/db/data
+    ports:
+      - "5000:5001"
+    depends_on:
+      db:
+        condition: service_healthy
+      microservice:
+        condition: service_started
+    networks:
+      - app-network
+
+  frontend:
+    build: ./frontend
+    container_name: dacn_frontend
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  microservice:
+    build: ./microservice
+    container_name: dacn_microservice
+    environment:
+      PYTHONUNBUFFERED: 1
+      PORT: 5002
+    volumes:
+      - ./db/data:/db/data
+    ports:
+      - "5002:5002"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   postgres_data:

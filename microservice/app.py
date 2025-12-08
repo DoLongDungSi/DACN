@@ -1,192 +1,123 @@
-import os
-import subprocess
-import tempfile
-import traceback
 from flask import Flask, request, jsonify
-from werkzeug.utils import secure_filename
-import time # Import time for measuring execution
+import pandas as pd
+import sys
+import os
+import uuid
+import subprocess
+import traceback
+import shutil
 
 app = Flask(__name__)
 
-# Directory to temporarily store files during evaluation
-UPLOAD_FOLDER = 'temp_eval'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+# Thư mục tạm để lưu file khi chấm
+TEMP_DIR = "/tmp/eval"
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
 
 @app.route('/evaluate', methods=['POST'])
-def evaluate_submission():
-    """
-    Receives submission, ground truth, public test, and script content.
-    Runs the script.
-    Returns structured status ('succeeded', 'failed'), score (actual score, -1.0, 0.0, or None),
-    runtime, and error message.
-    """
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
-
-    data = request.get_json()
-    submission_content = data.get('submission_file_content')
-    ground_truth_content = data.get('ground_truth_content')
-    public_test_content = data.get('public_test_content')
-    script_content = data.get('evaluation_script_content')
-    runtime_ms = None # Initialize runtime
-
-    # Validation: Ensure all required content is present
-    if not all([submission_content, ground_truth_content, public_test_content, script_content]):
-        missing = [k for k, v in {
-            "submission_file_content": submission_content,
-            "ground_truth_content": ground_truth_content,
-            "public_test_content": public_test_content,
-            "evaluation_script_content": script_content
-        }.items() if not v]
-        print(f"Evaluation request failed: Missing content for {missing}") # Log missing keys
-        return jsonify({"error": f"Missing content: {', '.join(missing)}"}), 400
-
-    submission_path = None
-    ground_truth_path = None
-    public_test_path = None
-    script_path = None
-    output_path = None
-    start_time = time.perf_counter() # Start timer before file operations
-
+def evaluate():
+    run_dir = None
     try:
-        # Create temporary files using a context manager for automatic cleanup (delete=True is default)
-        # Using NamedTemporaryFile ensures unique names even with concurrent requests
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_submission.csv', delete=False, dir=app.config['UPLOAD_FOLDER'], encoding='utf-8') as sub_file, \
-             tempfile.NamedTemporaryFile(mode='w', suffix='_ground_truth.csv', delete=False, dir=app.config['UPLOAD_FOLDER'], encoding='utf-8') as gt_file, \
-             tempfile.NamedTemporaryFile(mode='w', suffix='_public_test.csv', delete=False, dir=app.config['UPLOAD_FOLDER'], encoding='utf-8') as pt_file, \
-             tempfile.NamedTemporaryFile(mode='w', suffix='_eval_script.py', delete=False, dir=app.config['UPLOAD_FOLDER'], encoding='utf-8') as script_file, \
-             tempfile.NamedTemporaryFile(mode='w', suffix='_output.txt', delete=False, dir=app.config['UPLOAD_FOLDER'], encoding='utf-8') as output_file:
+        # 1. Kiểm tra dữ liệu đầu vào
+        if 'submission_file' not in request.files:
+            return jsonify({'error': 'Missing submission_file'}), 400
+        if 'ground_truth_file' not in request.files:
+            return jsonify({'error': 'Missing ground_truth_file'}), 400
+        
+        # Script có thể là file hoặc text. Ưu tiên text nếu backend gửi text.
+        eval_script_content = request.form.get('evaluation_script')
+        
+        submission_file = request.files['submission_file']
+        ground_truth_file = request.files['ground_truth_file']
 
-            submission_path = sub_file.name
-            ground_truth_path = gt_file.name
-            public_test_path = pt_file.name
-            script_path = script_file.name
-            output_path = output_file.name
+        # 2. Tạo ID duy nhất cho lần chấm này để tránh xung đột file
+        run_id = str(uuid.uuid4())
+        run_dir = os.path.join(TEMP_DIR, run_id)
+        os.makedirs(run_dir, exist_ok=True)
 
-            sub_file.write(submission_content)
-            gt_file.write(ground_truth_content)
-            pt_file.write(public_test_content)
-            script_file.write(script_content)
+        sub_path = os.path.join(run_dir, "submission.csv")
+        gt_path = os.path.join(run_dir, "ground_truth.csv")
+        script_path = os.path.join(run_dir, "evaluate.py")
+        output_path = os.path.join(run_dir, "score.txt")
 
-            # Ensure data is written before subprocess call
-            sub_file.flush()
-            gt_file.flush()
-            pt_file.flush()
-            script_file.flush()
-            output_file.flush() # Flush output file handle too
+        # 3. Lưu file xuống đĩa
+        submission_file.save(sub_path)
+        ground_truth_file.save(gt_path)
 
-        print(f"Running script: {script_path}")
-        print(f"Submission file: {submission_path}")
-        print(f"Ground Truth file: {ground_truth_path}")
-        print(f"Public test file: {public_test_path}")
-        print(f"Output file: {output_path}")
+        if eval_script_content and eval_script_content.strip():
+            with open(script_path, 'w') as f:
+                f.write(eval_script_content)
+        else:
+            # Fallback nếu không có script custom: Dùng Accuracy mặc định
+            # LƯU Ý QUAN TRỌNG: Backend gọi script với thứ tự:
+            # argv[1]: submission, argv[2]: ground_truth, argv[3]: dummy, argv[4]: output_path
+            default_script = """
+import sys
+import pandas as pd
+from sklearn.metrics import accuracy_score
 
-        # Execute the evaluation script
-        command = ['python', script_path, submission_path, ground_truth_path, public_test_path, output_path]
+def evaluate(sub_path, gt_path, out_path):
+    try:
+        sub = pd.read_csv(sub_path)
+        gt = pd.read_csv(gt_path)
+        
+        # Giả sử cột target là cột cuối cùng
+        y_pred = sub.iloc[:, -1]
+        y_true = gt.iloc[:, -1]
+        
+        score = accuracy_score(y_true, y_pred)
+        
+        with open(out_path, 'w') as f: 
+            f.write(str(score))
+            
+    except Exception as e:
+        print(f"Error details: {e}", file=sys.stderr)
+        sys.exit(1)
 
-        score = None
-        process_error = None
-        status = "failed" # Default status to failed
+if __name__ == "__main__":
+    # Backend truyền 4 tham số, tham số thứ 4 (index 4) là đường dẫn file kết quả
+    if len(sys.argv) < 5:
+        print("Not enough arguments", file=sys.stderr)
+        sys.exit(1)
+        
+    evaluate(sys.argv[1], sys.argv[2], sys.argv[4])
+"""
+            with open(script_path, 'w') as f:
+                f.write(default_script)
 
-        try:
-            process = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                # check=False, # MODIFIED: Do not raise error on non-zero exit code
-                timeout=45, # Keep timeout
-                encoding='utf-8',
-                errors='replace'
-            )
+        # 4. Chạy script chấm điểm trong môi trường cách ly (subprocess)
+        # Lệnh gọi: python evaluate.py <sub_path> <gt_path> <fake_public_test_path> <output_path>
+        cmd = [sys.executable, script_path, sub_path, gt_path, gt_path, output_path]
+        
+        # Timeout 60s để tránh treo
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
-            end_time = time.perf_counter()
-            runtime_ms = (end_time - start_time) * 1000
+        if result.returncode != 0:
+            print(f"Script Error Stderr: {result.stderr}")
+            return jsonify({'score': 0, 'error': f"Runtime Error: {result.stderr}"}), 200
 
-            stdout = process.stdout
-            stderr = process.stderr
-
-            print(f"Script STDOUT:\n{stdout}")
-            if stderr:
-                print(f"Script STDERR:\n{stderr}")
-
-            # Always try to read the score from the output file, regardless of exit code
-            score_str = ""
-            try:
-                with open(output_path, 'r', encoding='utf-8') as f:
-                    score_str = f.read().strip()
-                score = float(score_str)
-                # Allow -1.0 and 0.0 as valid scores reported by the script on failure
-                if not (score == -1.0 or score == 0.0 or score >= 0):
-                     raise ValueError(f"Score read from file ({score}) is not -1.0, 0.0, or >= 0.")
-            except (IOError, ValueError) as e:
-                # If we cannot read/parse score, it's a critical failure of the script contract
-                process_error = f"Failed to read/parse score from output file '{output_path}': {e}. Script stderr: {stderr}"
-                print(process_error)
-                score = None # Ensure score is None if reading fails
-                # Keep status as "failed"
-
-            # Check the script's exit code AFTER attempting to read score
-            if process.returncode != 0:
-                process_error = f"Script exited with error code {process.returncode}. Stderr: {stderr}"
-                print(process_error)
-                status = "failed" # Confirm status is failed
-                # Use the score read from the file (-1.0 or 0.0) if available
-            elif score is None:
-                # Script exited successfully (0), but we failed to get a score (e.g., empty output file)
-                process_error = f"Script exited successfully but failed to write a valid score to '{output_path}'. Script stderr: {stderr}"
-                print(process_error)
-                status = "failed" # Treat as failure
-                score = None
-            elif score < 0:
-                # Script exited successfully (0) but reported an invalid negative score (not -1.0)
-                # This contradicts the contract.
-                process_error = f"Script exited successfully but reported an invalid negative score: {score}. Expected -1.0 for format error or >= 0 for success."
-                print(process_error)
-                status = "failed"
-                score = None # Discard the invalid score
-            else:
-                 # Script exited successfully (0) AND score is valid (>= 0)
-                 status = "succeeded"
-                 process_error = None # Clear any previous error messages if successful now
-
-            # Return the result (status is now correctly determined)
-            # Score can be None, -1.0, 0.0, or >= 0
-            return jsonify({"status": status, "score": score, "runtime_ms": runtime_ms, "error": process_error}), 200
-
-        except subprocess.TimeoutExpired as e:
-            end_time = time.perf_counter()
-            runtime_ms = (end_time - start_time) * 1000
-            stderr_output = e.stderr.strip() if e.stderr else "No stderr output."
-            process_error = f"Evaluation script timed out after {e.timeout} seconds. Stderr: {stderr_output}"
-            print(process_error)
-            # Timeout is always a failure with no score
-            return jsonify({"status": "failed", "error": process_error, "score": None, "runtime_ms": runtime_ms}), 200
-
-        except Exception as e:
-            # Catch unexpected errors during subprocess execution (e.g., file not found if temp dir cleaned early)
-            end_time = time.perf_counter()
-            runtime_ms = (end_time - start_time) * 1000
-            process_error = f"Unexpected error during script execution: {str(e)}"
-            print(f"Unexpected execution error: {traceback.format_exc()}")
-            # Return 500 for internal errors
-            return jsonify({"status": "failed", "error": process_error, "score": None, "runtime_ms": runtime_ms}), 500
+        # 5. Đọc kết quả
+        if os.path.exists(output_path):
+            with open(output_path, 'r') as f:
+                score_str = f.read().strip()
+                try:
+                    score = float(score_str)
+                    return jsonify({'score': score, 'error': None})
+                except ValueError:
+                    return jsonify({'score': 0, 'error': f"Invalid score format: {score_str}"})
+        else:
+            return jsonify({'score': 0, 'error': "No output file generated by evaluation script"})
 
     except Exception as e:
-        # Error creating/writing temporary files before execution
-        end_time = time.perf_counter() # Measure time even for setup failure
-        runtime_ms = (end_time - start_time) * 1000
-        process_error = f"Internal server error setting up evaluation: {str(e)}"
-        print(f"Error setting up evaluation files: {traceback.format_exc()}")
-        return jsonify({"status": "failed", "error": process_error, "score": None, "runtime_ms": runtime_ms}), 500
+        traceback.print_exc()
+        return jsonify({'score': 0, 'error': str(e)}), 500
     finally:
-        # Cleanup: Attempt to remove the temporary files
-        for path in [submission_path, ground_truth_path, public_test_path, script_path, output_path]:
-             if path and os.path.exists(path):
-                 try: os.remove(path)
-                 except OSError as e: print(f"Warning: Error removing temp file {path}: {e}")
+        # Dọn dẹp file tạm
+        if run_dir and os.path.exists(run_dir):
+            try:
+                shutil.rmtree(run_dir)
+            except Exception as e:
+                print(f"Error cleaning up {run_dir}: {e}")
 
 if __name__ == '__main__':
-    # Use Gunicorn or Waitress in production instead of Flask's development server
-    # For development:
-    app.run(host='0.0.0.0', port=5002, debug=os.environ.get('FLASK_ENV') == 'development')
+    app.run(host='0.0.0.0', port=5002)

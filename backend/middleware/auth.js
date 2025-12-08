@@ -1,66 +1,64 @@
-// backend/middleware/auth.js
 const jwt = require('jsonwebtoken');
-const { JWT_SECRET, OWNER_ID } = require('../config/constants'); // Import constants
+const { JWT_SECRET } = require('../config/constants');
+const pool = require('../config/db');
 
-/**
- * Middleware to verify JWT token from cookies.
- * Attaches userId and userRole to the request object if valid.
- */
+// Middleware xác thực người dùng qua Cookie
 const authMiddleware = (req, res, next) => {
+  // Lấy token từ cookie
   const token = req.cookies.token;
+
   if (!token) {
-    return res.status(401).json({ message: 'Not authenticated' });
+    return res.status(401).json({ message: 'Bạn chưa đăng nhập.' });
   }
 
   try {
+    // Giải mã token
     const decoded = jwt.verify(token, JWT_SECRET);
     req.userId = decoded.userId;
-    req.userRole = decoded.role; // Assuming role is stored in the token
+    req.userRole = decoded.role;
     next();
   } catch (err) {
-    console.error('JWT Verification Error:', err.message);
-    // Clear potentially invalid cookie
-    res.clearCookie('token');
-    return res.status(401).json({ message: 'Invalid or expired token' });
+    console.error('Auth Error:', err.message);
+    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
   }
 };
 
-/**
- * Middleware to check if the user is an 'owner' or 'creator'.
- * Requires authMiddleware to run first.
- */
-const ownerOrCreatorMiddleware = (req, res, next) => {
-  // Ensure authMiddleware has run and set userRole
-  if (!req.userRole) {
-     console.warn('ownerOrCreatorMiddleware called without preceding authMiddleware or failed auth.');
-     return res.status(401).json({ message: 'Authentication required' });
-  }
-  if (req.userRole === 'owner' || req.userRole === 'creator') {
+// Middleware kiểm tra quyền (Role)
+const checkRole = (roles) => {
+  return (req, res, next) => {
+    if (!req.userRole || !roles.includes(req.userRole)) {
+      return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này.' });
+    }
     next();
-  } else {
-    res.status(403).json({ message: 'Forbidden: Owner or Creator access required' });
-  }
+  };
 };
 
-/**
- * Middleware to check if the user is an 'owner'.
- * Requires authMiddleware to run first.
- */
-const ownerMiddleware = (req, res, next) => {
-   // Ensure authMiddleware has run and set userRole
-   if (!req.userRole) {
-      console.warn('ownerMiddleware called without preceding authMiddleware or failed auth.');
-      return res.status(401).json({ message: 'Authentication required' });
-   }
-  if (req.userRole === 'owner') {
+// [THÊM MỚI] Middleware dành riêng cho Admin/Owner để sửa lỗi crash
+const adminMiddleware = (req, res, next) => {
+    // Các role được phép truy cập admin
+    const allowedRoles = ['owner', 'admin'];
+
+    if (!req.userRole || !allowedRoles.includes(req.userRole)) {
+        return res.status(403).json({ message: 'Yêu cầu quyền quản trị viên.' });
+    }
     next();
-  } else {
-    res.status(403).json({ message: 'Forbidden: Owner access required' });
-  }
 };
 
-module.exports = {
-  authMiddleware,
-  ownerOrCreatorMiddleware,
-  ownerMiddleware,
+// Middleware xác thực tùy chọn (optional auth)
+const optionalAuth = (req, res, next) => {
+    const token = req.cookies.token;
+
+    if (token) {
+        try {
+            const decoded = jwt.verify(token, JWT_SECRET);
+            req.userId = decoded.userId;
+            req.userRole = decoded.role;
+        } catch (err) {
+            // Nếu token không hợp lệ, bỏ qua và tiếp tục
+            console.error('Optional Auth Error:', err.message);
+        }
+    }
+    next();
 };
+
+module.exports = { authMiddleware, checkRole, adminMiddleware, optionalAuth };

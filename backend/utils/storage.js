@@ -1,55 +1,66 @@
-// backend/utils/storage.js
-const fs = require('fs');
+const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const { DATA_ROOT } = require('../config/constants');
 
-// Centralized data root so every module reads/writes from the same place.
-// Defaults to <repo>/db/data to keep datasets/versioned assets together.
-const defaultRoot = path.resolve(__dirname, '../../db/data');
-const DATA_ROOT = process.env.DATA_ROOT ? path.resolve(process.env.DATA_ROOT) : defaultRoot;
+// Định nghĩa đường dẫn tuyệt đối an toàn
+const DATA_DIR = DATA_ROOT;
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads'); // Lưu tất cả vào db/data/uploads
 
 const ensureDir = (dirPath) => {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-  return dirPath;
-};
-
-ensureDir(DATA_ROOT);
-
-const resolveFilePath = (fileRef) => {
-  if (!fileRef) return null;
-  if (path.isAbsolute(fileRef)) return fileRef;
-  return path.join(DATA_ROOT, fileRef);
-};
-
-const readFileContent = (fileRef, fallbackFilename) => {
-  const candidatePaths = [];
-  if (fileRef) candidatePaths.push(resolveFilePath(fileRef));
-  if (fallbackFilename) {
-    const sanitized = path.basename(fallbackFilename);
-    candidatePaths.push(
-      path.join('/usr/src/test', sanitized),
-      path.join(__dirname, '../../test', sanitized),
-      path.join(process.cwd(), 'test', sanitized),
-    );
-  }
-
-  for (const candidate of candidatePaths) {
-    if (!candidate) continue;
-    try {
-      if (fs.existsSync(candidate)) {
-        return fs.readFileSync(candidate, 'utf8');
-      }
-    } catch (error) {
-      console.error('[storage] Error reading file', candidate, error);
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
     }
-  }
-  return null;
 };
 
-module.exports = {
-  DATA_ROOT,
-  ensureDir,
-  resolveFilePath,
-  readFileContent,
+// Khởi tạo thư mục ngay lập tức
+ensureDir(DATA_DIR);
+ensureDir(UPLOADS_DIR);
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        // Đảm bảo thư mục tồn tại trước khi lưu
+        ensureDir(UPLOADS_DIR);
+        cb(null, UPLOADS_DIR);
+    },
+    filename: function (req, file, cb) {
+        // Tên file: timestamp-uuid-tên-gốc (đã làm sạch)
+        const ext = path.extname(file.originalname);
+        const name = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9]/g, '_');
+        cb(null, `${Date.now()}-${uuidv4()}-${name}${ext}`);
+    }
+});
+
+const uploadProblemFiles = multer({ 
+    storage: storage,
+    limits: { fileSize: 500 * 1024 * 1024 } // 500MB
+}).fields([
+    { name: 'trainCsv', maxCount: 1 },
+    { name: 'testCsv', maxCount: 1 },
+    { name: 'groundTruthCsv', maxCount: 1 },
+    { name: 'coverImage', maxCount: 1 }
+]);
+
+const resolveFilePath = (relativePath) => {
+    if (!relativePath) return null;
+    if (path.isAbsolute(relativePath)) return fs.existsSync(relativePath) ? relativePath : null;
+
+    // Ưu tiên tìm trong UPLOADS_DIR
+    const inUploads = path.join(UPLOADS_DIR, relativePath);
+    if (fs.existsSync(inUploads)) return inUploads;
+
+    // Tìm trong DATA_DIR
+    const inData = path.join(DATA_DIR, relativePath);
+    if (fs.existsSync(inData)) return inData;
+
+    return null;
+};
+
+module.exports = { 
+    uploadProblemFiles, 
+    resolveFilePath, 
+    DATA_ROOT: DATA_DIR, 
+    UPLOADS_ROOT: UPLOADS_DIR,
+    ensureDir 
 };

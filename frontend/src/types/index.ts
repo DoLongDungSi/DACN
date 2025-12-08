@@ -1,32 +1,30 @@
-// types.ts
-
-export type Role = "user" | "creator" | "owner";
+export type Role = "user" | "creator" | "owner" | "admin";
 export type Difficulty = "easy" | "medium" | "hard";
-export type ProblemType = "classification" | "regression" | "other"; // Added 'other' for flexibility
+export type ProblemType = "classification" | "regression" | "other";
 export type Direction = "maximize" | "minimize";
 export type AuthMode = "login" | "signup";
 export type Page = "problems" | "problem-detail" | "my-submissions" | "profile" | "admin" | "problem-editor" | "settings";
 export type CurrentView = "loading" | "auth" | "main";
+export type SubmissionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'format_error' | 'runtime_error';
 
 export interface User {
     id: number;
     username: string;
     email: string;
     role: Role;
-    joinedAt: string; // ISO date string
+    joinedAt: string;
     avatarColor?: string;
-    avatarUrl?: string | null; // Allow null for avatar
+    avatarUrl?: string | null;
     profile: UserProfile;
     isBanned: boolean;
     isPremium?: boolean;
-    // passwordHash should NEVER be sent to frontend
 }
 
 export interface UserProfile {
     realName?: string | null;
     gender?: 'Male' | 'Female' | 'Other' | null;
     country?: string | null;
-    birthday?: string | null; // YYYY-MM-DD
+    birthday?: string | null;
     summary?: string | null;
     website?: string | null;
     github?: string | null;
@@ -42,19 +40,18 @@ export interface UserProfile {
 }
 
 export interface Education {
-    id: number; // Or string if using UUIDs
+    id: number;
     school: string;
     degree: string;
-    duration: string; // e.g., "2018 - 2022"
+    duration: string;
 }
 
 export interface WorkExperience {
-    id: number; // Or string
+    id: number;
     title: string;
     company: string;
-    duration: string; // e.g., "2022 - Nay"
+    duration: string;
 }
-
 
 export interface NotificationPreferences {
     award?: { site: boolean; email: boolean };
@@ -65,73 +62,74 @@ export interface NotificationPreferences {
     featureAnnouncements?: { site: boolean; email: boolean };
 }
 
-
-export interface Tag {
-    id: number;
-    name: string;
-}
-
-export interface Metric {
-    id: number;
-    key: string; // e.g., 'accuracy', 'rmse'
-    direction: Direction;
-}
+export interface Tag { id: number; name: string; }
+export interface Metric { id: number; key: string; direction: Direction; }
 
 export interface Dataset {
-    split: 'train' | 'public_test' | 'private_test' | string; // Allow custom splits, but define common ones
-    filename: string;
-    content?: string; // Content might be stored elsewhere in production
+    split: string;
+    fileName: string;
     downloadUrl?: string;
     sizeBytes?: number | null;
-    // Add other metadata like size, rows, columns if needed
 }
 
+export interface DatasetFile {
+    split: string;
+    path: string;
+    fileName: string;
+    originalName: string;
+    size: number;
+}
 
 export interface Problem {
     id: number;
     name: string;
     difficulty: Difficulty;
-    content: string; // Markdown content describing the problem
+    content: string;
     summary?: string | null;
+    dataDescription?: string | null;
+    prizes?: string | null;
+    isFrozen: boolean;
+    isDeleted: boolean;
     problemType: ProblemType;
-    authorId?: number | null; // Can be null if author deleted
-    authorUsername?: string; // Included from backend join
-    createdAt: string; // ISO date string
-    datasets: Dataset[]; // Array containing metadata or full data
-    tags: number[]; // Array of Tag IDs
-    metrics: number[]; // Array of Metric IDs (for display purposes)
-    evaluationScript?: string | null; // The Python script content for evaluation
-    groundTruthContent?: string | null; // Content of the ground truth file
+    authorId?: number | null;
+    authorUsername?: string;
+    authorAvatar?: string;
+    createdAt: string;
+    updatedAt: string;
+    datasets: DatasetFile[];
+    tags: Tag[];
+    metrics: Metric[];
+    evaluationScript?: string | null;
     coverImageUrl?: string | null;
-    // Optional: Add fields like participant count, submission count
-    hasEvaluationScript?: boolean; // Indicate if script exists (derived in backend)
-    hasGroundTruth?: boolean; // Indicate if ground truth exists (derived in backend)
-    metricsLinks?: { metricId: number; isPrimary: boolean }[]; // Info about which metric is primary
 }
+
 
 export interface Submission {
     id: number;
     problemId: number;
     userId: number;
     username: string;
-    status: 'pending' | 'running' | 'succeeded' | 'failed';
+    status: SubmissionStatus;
     publicScore?: number | null;
+    privateScore?: number | null;
     runtimeMs?: number | null;
     submittedAt: string;
-    problemName?: string;
-    evaluationDetails?: { error?: string } | null;
+    evaluatedAt?: string | null;
+    filePath?: string | null;
+    evaluationDetails?: Record<string, unknown>;
+    isOfficial: boolean;
 }
 
 export interface DiscussionPost {
     id: number;
     problemId: number;
     userId: number;
-    username: string; // from join
-    avatarColor?: string; // from join
-    avatarUrl?: string | null; // from join
+    username: string;
+    avatarColor?: string;
+    avatarUrl?: string | null;
     title: string;
     content: string;
-    createdAt: string; // ISO date string
+    createdAt: string;
     upvotedBy: number[];
     downvotedBy: number[];
 }
@@ -139,13 +137,13 @@ export interface DiscussionPost {
 export interface DiscussionComment {
     id: number;
     postId: number;
-    parentId?: number | null; // Null for top-level comments
+    parentId?: number | null;
     userId: number;
-    username: string; // from join
-    avatarColor?: string; // from join
-    avatarUrl?: string | null; // from join
+    username: string;
+    avatarColor?: string;
+    avatarUrl?: string | null;
     content: string;
-    createdAt: string; // ISO date string
+    createdAt: string;
     upvotedBy: number[];
     downvotedBy: number[];
 }
@@ -163,26 +161,11 @@ export interface Subscription {
     status: string;
     startedAt?: string;
     renewsAt?: string | null;
-    canceledAt?: string | null;
-}
-
-export interface Payment {
-    id: number;
-    subscriptionId?: number | null;
-    provider: string;
-    providerRef?: string | null;
-    status: string;
-    amountCents: number;
-    currency: string;
-    createdAt: string;
-    updatedAt?: string;
 }
 
 export interface Invoice {
     id: number;
-    subscriptionId?: number | null;
-    paymentId?: number | null;
-    invoiceNumber?: string | null;
+    invoiceNumber?: string;
     amountCents: number;
     currency: string;
     status: string;
@@ -190,11 +173,37 @@ export interface Invoice {
     pdfPath?: string | null;
 }
 
-export interface LeaderboardEntry {
-    rank?: number; // Optional because it's calculated on frontend
-    username: string;
-    score: number; // Assuming public score is used
-    subId: number; // ID of the best submission
-    time: string; // Submission time of the best submission
+export interface Payment {
+    id: number;
+    status: string;
+    amountCents: number;
+    currency: string;
+    createdAt: string;
 }
 
+export interface LeaderboardEntry {
+    rank?: number;
+    username: string;
+    avatarColor?: string;
+    score: number;
+    subId: number;
+    time: string;
+}
+
+export interface ApiResponse<T = any> {
+    success: boolean;
+    message?: string;
+    data?: T;
+    error?: string;
+}
+
+export interface LoadingState {
+    isLoading: boolean;
+    error?: string | null;
+}
+
+export interface ProblemDetailState extends LoadingState {
+    problem: Problem | null;
+    submissions: Submission[];
+    leaderboard: LeaderboardEntry[];
+}
