@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const { authMiddleware, adminMiddleware } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
 
-// Middleware chung cho toàn bộ file
+// Middleware xác thực & admin
 router.use(authMiddleware);
 router.use(adminMiddleware);
 
@@ -13,7 +13,7 @@ router.use(adminMiddleware);
 router.get('/stats', async (req, res) => {
     try {
         const userCount = await pool.query('SELECT COUNT(*) FROM users');
-        const problemCount = await pool.query('SELECT COUNT(*) FROM problems'); // Giữ nguyên query gốc
+        const problemCount = await pool.query('SELECT COUNT(*) FROM problems');
         const subCount = await pool.query('SELECT COUNT(*) FROM submissions');
         
         const dailySubs = await pool.query(`
@@ -42,24 +42,25 @@ router.get('/stats', async (req, res) => {
 // 2. Get All Users
 router.get('/users', async (req, res) => {
     try {
-        // Giữ nguyên is_locked như file gốc
+        // [FIX] Sửa is_locked -> is_banned để khớp với init.sql
         const result = await pool.query(`
-            SELECT id, username, email, role, created_at, is_locked, avatar_url,
+            SELECT id, username, email, role, created_at, is_banned, avatar_url,
             (SELECT COUNT(*) FROM submissions WHERE user_id = users.id) as submission_count
             FROM users ORDER BY created_at DESC
         `);
         res.json({ users: toCamelCase(result.rows) });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi lấy user' });
+        res.status(500).json({ message: 'Lỗi lấy danh sách user' });
     }
 });
 
-// 3. Get Single User (Chi tiết)
+// 3. Get Single User
 router.get('/users/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query(`SELECT id, username, email, role, created_at, is_locked, avatar_url FROM users WHERE id = $1`, [id]);
+        // [FIX] Sửa is_locked -> is_banned
+        const result = await pool.query(`SELECT id, username, email, role, created_at, is_banned, avatar_url FROM users WHERE id = $1`, [id]);
         if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
         res.json({ user: toCamelCase(result.rows[0]) });
     } catch (err) {
@@ -68,18 +69,37 @@ router.get('/users/:id', async (req, res) => {
     }
 });
 
-// 4. Lock User (Giữ nguyên logic isLocked)
-router.put('/users/:id/lock', async (req, res) => {
+// 4. Ban/Unban User (Sửa lại Logic & Route)
+// Frontend gọi /ban, logic là toggle (khóa <-> mở)
+router.put('/users/:id/ban', async (req, res) => {
     const { id } = req.params;
-    const { isLocked } = req.body; 
-    if (parseInt(id) === req.userId) return res.status(400).json({ message: 'Không thể tự khóa mình.' });
+    
+    // Không cho phép ban chính mình
+    if (parseInt(id) === req.userId) return res.status(400).json({ message: 'Không thể tự khóa tài khoản của mình.' });
 
     try {
-        await pool.query('UPDATE users SET is_locked = $1 WHERE id = $2', [isLocked, id]);
-        res.json({ success: true, message: `Đã ${isLocked ? 'khóa' : 'mở'} user.` });
+        // [FIX] Dùng logic NOT is_banned để toggle trạng thái
+        // [FIX] Thêm RETURNING * để trả về user mới nhất cho Frontend (tránh trắng trang)
+        const result = await pool.query(`
+            UPDATE users 
+            SET is_banned = NOT is_banned 
+            WHERE id = $1 
+            RETURNING id, username, email, role, is_banned, avatar_url
+        `, [id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const updatedUser = result.rows[0];
+        res.json({ 
+            success: true, 
+            message: `Đã ${updatedUser.is_banned ? 'khóa' : 'mở khóa'} user.`,
+            user: toCamelCase(updatedUser) // Trả về user để Frontend cập nhật state
+        });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi lock user' });
+        res.status(500).json({ message: 'Lỗi khi khóa/mở khóa user' });
     }
 });
 
@@ -88,35 +108,51 @@ router.put('/users/:id/role', async (req, res) => {
     const { id } = req.params;
     const { role } = req.body;
     const validRoles = ['admin', 'user', 'creator', 'owner'];
-    if (!validRoles.includes(role)) return res.status(400).json({ message: 'Role sai.' });
-    if (parseInt(id) === req.userId) return res.status(400).json({ message: 'Không thể tự đổi role mình.' });
+    
+    if (!validRoles.includes(role)) return res.status(400).json({ message: 'Role không hợp lệ.' });
+    if (parseInt(id) === req.userId) return res.status(400).json({ message: 'Không thể tự đổi role của mình.' });
 
     try {
-        await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
-        res.json({ success: true, message: 'Đổi role thành công.' });
+        // [FIX] Thêm RETURNING * để trả về user (SỬA LỖI TRẮNG TRANG)
+        const result = await pool.query(`
+            UPDATE users 
+            SET role = $1 
+            WHERE id = $2 
+            RETURNING id, username, email, role, is_banned, avatar_url
+        `, [role, id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Đổi role thành công.',
+            user: toCamelCase(result.rows[0]) // Trả về user
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Lỗi đổi role' });
     }
 });
 
-// 6. Reset Password (Đã khôi phục lại hàm này)
+// 6. Reset Password
 router.put('/users/:id/reset-password', async (req, res) => {
     const { id } = req.params;
     const { newPassword } = req.body;
-    if (!newPassword || newPassword.length < 6) return res.status(400).json({ message: 'Password quá ngắn.' });
+    if (!newPassword || newPassword.length < 6) return res.status(400).json({ message: 'Mật khẩu quá ngắn.' });
 
     try {
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedPassword, id]);
-        res.json({ success: true, message: 'Reset password thành công.' });
+        res.json({ success: true, message: 'Reset mật khẩu thành công.' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Lỗi reset password' });
     }
 });
 
-// 7. Delete User (Giữ nguyên author_id)
+// 7. Delete User
 router.delete('/users/:id', async (req, res) => {
     const { id } = req.params;
     if (parseInt(id) === req.userId) return res.status(400).json({ message: 'Không thể tự xóa mình.' });
@@ -125,7 +161,6 @@ router.delete('/users/:id', async (req, res) => {
     try {
         await client.query('BEGIN');
         await client.query('DELETE FROM submissions WHERE user_id = $1', [id]);
-        // SỬ DỤNG author_id như file gốc của bạn
         await client.query('DELETE FROM problems WHERE author_id = $1', [id]);
         await client.query('DELETE FROM users WHERE id = $1', [id]);
         await client.query('COMMIT');
@@ -138,5 +173,58 @@ router.delete('/users/:id', async (req, res) => {
         client.release();
     }
 });
+
+// --- ROUTES CHO TAGS & METRICS (Bổ sung để Admin Page không bị lỗi 404 khi gọi API) ---
+
+// Get Tags
+router.get('/tags', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM tags ORDER BY id ASC');
+        res.json({ tags: toCamelCase(result.rows) });
+    } catch (err) { res.status(500).json({ message: 'Error' }); }
+});
+
+// Add Tag
+router.post('/tags', async (req, res) => {
+    const { name } = req.body;
+    try {
+        const result = await pool.query('INSERT INTO tags (name) VALUES ($1) RETURNING *', [name]);
+        res.json({ tag: toCamelCase(result.rows[0]) });
+    } catch (err) { res.status(500).json({ message: 'Error' }); }
+});
+
+// Delete Tag
+router.delete('/tags/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM tags WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ message: 'Error' }); }
+});
+
+// Get Metrics
+router.get('/metrics', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM metrics ORDER BY id ASC');
+        res.json({ metrics: toCamelCase(result.rows) });
+    } catch (err) { res.status(500).json({ message: 'Error' }); }
+});
+
+// Add Metric
+router.post('/metrics', async (req, res) => {
+    const { key, direction } = req.body; // direction: 'maximize' or 'minimize'
+    try {
+        const result = await pool.query('INSERT INTO metrics (key, direction) VALUES ($1, $2) RETURNING *', [key, direction]);
+        res.json({ metric: toCamelCase(result.rows[0]) });
+    } catch (err) { res.status(500).json({ message: 'Error' }); }
+});
+
+// Delete Metric
+router.delete('/metrics/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM metrics WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ message: 'Error' }); }
+});
+
 
 module.exports = router;

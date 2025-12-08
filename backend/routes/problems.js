@@ -3,7 +3,6 @@ const router = express.Router();
 const pool = require('../config/db');
 const { authMiddleware, optionalAuth } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
-// [QUAN TRỌNG] Khôi phục lại middleware uploadProblemFiles từ storage
 const { uploadProblemFiles, resolveFilePath, UPLOADS_ROOT } = require('../utils/storage');
 const fs = require('fs');
 const path = require('path');
@@ -26,7 +25,7 @@ const deleteProblemFiles = (datasets, coverImage) => {
     }
 };
 
-// --- Helper: Đồng bộ Tags & Metrics vào cột JSON ---
+// --- Helper: Đồng bộ Tags & Metrics ---
 const syncDenormalizedData = async (client, problemId, tagIds, metricIds) => {
     let tagNames = [];
     let metricKeys = [];
@@ -47,11 +46,13 @@ const syncDenormalizedData = async (client, problemId, tagIds, metricIds) => {
     );
 };
 
-// GET: Lấy danh sách bài toán
+// GET: Lấy danh sách
 router.get('/', optionalAuth, async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT p.*, u.username as author_name 
+            SELECT p.*, u.username as author_name,
+            (SELECT COALESCE(json_agg(tag_id), '[]') FROM problem_tags WHERE problem_id = p.id) as tag_ids,
+            (SELECT COALESCE(json_agg(metric_id), '[]') FROM problem_metrics WHERE problem_id = p.id) as metric_ids
             FROM problems p 
             LEFT JOIN users u ON p.author_id = u.id 
             ORDER BY p.created_at DESC
@@ -59,8 +60,10 @@ router.get('/', optionalAuth, async (req, res) => {
         
         const problems = result.rows.map(row => ({
             ...row,
-            tags: typeof row.tags === 'string' ? JSON.parse(row.tags) : (row.tags || []),
-            metrics: typeof row.metrics === 'string' ? JSON.parse(row.metrics) : (row.metrics || [])
+            tags: row.tag_ids || [], 
+            metrics: row.metric_ids || [],
+            // Fallback cho tên tag nếu cần hiển thị ngay
+            tagsJson: typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags
         }));
 
         res.json({ problems: toCamelCase(problems) });
@@ -70,12 +73,14 @@ router.get('/', optionalAuth, async (req, res) => {
     }
 });
 
-// GET: Lấy chi tiết bài toán
+// GET: Chi tiết
 router.get('/:id', optionalAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query(`
-            SELECT p.*, u.username as author_name, u.avatar_url as author_avatar
+            SELECT p.*, u.username as author_name, u.avatar_url as author_avatar,
+            (SELECT COALESCE(json_agg(tag_id), '[]') FROM problem_tags WHERE problem_id = p.id) as tag_ids,
+            (SELECT COALESCE(json_agg(metric_id), '[]') FROM problem_metrics WHERE problem_id = p.id) as metric_ids
             FROM problems p
             LEFT JOIN users u ON p.author_id = u.id
             WHERE p.id = $1
@@ -86,8 +91,8 @@ router.get('/:id', optionalAuth, async (req, res) => {
         const problem = result.rows[0];
         const parsedProblem = {
             ...problem,
-            tags: typeof problem.tags === 'string' ? JSON.parse(problem.tags) : (problem.tags || []),
-            metrics: typeof problem.metrics === 'string' ? JSON.parse(problem.metrics) : (problem.metrics || []),
+            tags: problem.tag_ids || [], 
+            metrics: problem.metric_ids || [],
             datasets: typeof problem.datasets === 'string' ? JSON.parse(problem.datasets) : (problem.datasets || [])
         };
 
@@ -112,7 +117,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
     }
 });
 
-// GET: Download File Dataset
+// GET: Download
 router.get('/:id/download/:fileName', optionalAuth, async (req, res) => {
     try {
         const { id, fileName } = req.params;
@@ -141,7 +146,70 @@ router.get('/:id/download/:fileName', optionalAuth, async (req, res) => {
     }
 });
 
-// PUT: Freeze/Unfreeze Problem
+// [ĐÃ KHÔI PHỤC] POST: Generate AI Hint
+router.post('/:id/hint', authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.userId;
+
+        // 1. Check Premium
+        const userRes = await pool.query('SELECT is_premium FROM users WHERE id = $1', [userId]);
+        if (userRes.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+        
+        // 2. Get Problem Context
+        const probRes = await pool.query('SELECT name, content, summary, problem_type FROM problems WHERE id = $1', [id]);
+        if (probRes.rows.length === 0) return res.status(404).json({ message: 'Problem not found' });
+        const problem = probRes.rows[0];
+
+        // 3. Setup OpenRouter
+        const apiKey = process.env.OPENROUTER_API_KEY;
+        if (!apiKey) return res.status(503).json({ message: 'AI Service unavailable (Missing Key)' });
+
+        const systemPrompt = process.env.HINT_SYSTEM_PROMPT || "You are a helpful AI assistant for Data Science competitions.";
+        const problemContext = `
+            Problem: ${problem.name}
+            Type: ${problem.problem_type}
+            Summary: ${problem.summary || ''}
+            Description (excerpt): ${problem.content ? problem.content.substring(0, 800) : 'No description'}
+        `;
+
+        // 4. Call API
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost:3000", 
+            },
+            body: JSON.stringify({
+                model: process.env.OPENROUTER_MODEL || "google/gemini-2.0-flash-lite-preview-02-05:free",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: `Please provide a helpful hint for this problem, focusing on approach rather than code:\n${problemContext}` }
+                ],
+                temperature: 0.7,
+                max_tokens: 400
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error("OpenRouter Error:", errText);
+            throw new Error(`AI Provider Error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const hint = data.choices?.[0]?.message?.content || "Không thể tạo gợi ý lúc này.";
+
+        res.json({ hint });
+
+    } catch (err) {
+        console.error("Hint Gen Error:", err);
+        res.status(500).json({ message: err.message || 'Server Error generating hint' });
+    }
+});
+
+// PUT: Freeze
 router.put('/:id/freeze', authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
@@ -155,14 +223,14 @@ router.put('/:id/freeze', authMiddleware, async (req, res) => {
         const newState = !check.rows[0].is_frozen;
         await pool.query('UPDATE problems SET is_frozen = $1 WHERE id = $2', [newState, id]);
 
-        res.json({ success: true, isFrozen: newState, message: `Bài toán đã được ${newState ? 'khóa' : 'mở khóa'}` });
+        res.json({ success: true, isFrozen: newState, message: `Status updated` });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server Error' });
     }
 });
 
-// DELETE: Xóa bài toán
+// DELETE
 router.delete('/:id', authMiddleware, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -183,17 +251,17 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 
         deleteProblemFiles(datasets, cover_image_url);
 
-        res.json({ success: true, message: 'Đã xóa bài toán thành công.' });
+        res.json({ success: true, message: 'Deleted' });
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Delete Error:', err);
-        res.status(500).json({ message: err.message || 'Server Error' });
+        res.status(500).json({ message: err.message });
     } finally {
         client.release();
     }
 });
 
-// POST: Tạo bài toán mới (Sử dụng uploadProblemFiles chuẩn)
+// POST: Create
 router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -207,7 +275,7 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
             tagIds = [], metricIds = []
         } = problemData;
 
-        if (!name || !difficulty) throw new Error('Tên và độ khó là bắt buộc');
+        if (!name || !difficulty) throw new Error('Name/Difficulty required');
 
         const createDatasetEntry = (file, split) => {
             if (!file) return null;
@@ -244,27 +312,32 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
         
         const problemId = probRes.rows[0].id;
 
-        // Insert Tags & Metrics vào bảng trung gian
+        // Xử lý Tags/Metrics với ép kiểu số an toàn
         if (tagIds.length > 0) {
-            const values = tagIds.flatMap(tid => [problemId, tid]);
-            await client.query(
-                `INSERT INTO problem_tags (problem_id, tag_id) VALUES ${tagIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
-                values
-            );
+            const cleanTagIds = tagIds.map(Number).filter(n => !isNaN(n));
+            if (cleanTagIds.length > 0) {
+                const values = cleanTagIds.flatMap(tid => [problemId, tid]);
+                await client.query(
+                    `INSERT INTO problem_tags (problem_id, tag_id) VALUES ${cleanTagIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
+                    values
+                );
+            }
         }
         if (metricIds.length > 0) {
-            const values = metricIds.flatMap(mid => [problemId, mid]);
-            await client.query(
-                `INSERT INTO problem_metrics (problem_id, metric_id) VALUES ${metricIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
-                values
-            );
+            const cleanMetricIds = metricIds.map(Number).filter(n => !isNaN(n));
+            if (cleanMetricIds.length > 0) {
+                const values = cleanMetricIds.flatMap(mid => [problemId, mid]);
+                await client.query(
+                    `INSERT INTO problem_metrics (problem_id, metric_id) VALUES ${cleanMetricIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
+                    values
+                );
+            }
         }
 
-        // [QUAN TRỌNG] Đồng bộ tên tag/metric vào bảng problems
         await syncDenormalizedData(client, problemId, tagIds, metricIds);
 
         await client.query('COMMIT');
-        res.status(201).json({ success: true, problemId, message: 'Tạo bài toán thành công' });
+        res.status(201).json({ success: true, problemId, message: 'Created successfully' });
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Create Error:', err);
@@ -274,17 +347,16 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
     }
 });
 
-// PUT: Cập nhật bài toán
+// PUT: Update
 router.put('/:id', authMiddleware, uploadProblemFiles, async (req, res) => {
     const client = await pool.connect();
     try {
         const { id } = req.params;
         await client.query('BEGIN');
-
         if (!req.body.problemData) throw new Error('Missing problemData');
 
         const checkRes = await client.query('SELECT author_id, datasets FROM problems WHERE id = $1', [id]);
-        if (checkRes.rows.length === 0) throw new Error('Problem not found');
+        if (checkRes.rows.length === 0) throw new Error('Not found');
         if (req.userRole !== 'admin' && checkRes.rows[0].author_id !== req.userId) throw new Error('Unauthorized');
 
         const currentDatasets = checkRes.rows[0].datasets || [];
@@ -296,9 +368,8 @@ router.put('/:id', authMiddleware, uploadProblemFiles, async (req, res) => {
             tagIds = [], metricIds = []
         } = problemData;
 
-        if (!name) throw new Error('Tên bài toán là bắt buộc');
+        if (!name) throw new Error('Name required');
 
-        // Xử lý file
         const createDatasetEntry = (file, split) => ({
             split,
             path: path.relative(UPLOADS_ROOT, file.path),
@@ -324,49 +395,36 @@ router.put('/:id', authMiddleware, uploadProblemFiles, async (req, res) => {
 
         const coverImageUrl = req.files['coverImage'] ? `/uploads/${req.files['coverImage'][0].filename}` : problemData.coverImageUrl;
 
-        const updateQuery = `
-            UPDATE problems SET
-                name = $1, summary = $2, content = $3, difficulty = $4,
-                problem_type = $5, data_description = $6, evaluation_script = $7,
-                datasets = $8, cover_image_url = $9, updated_at = NOW()
-            WHERE id = $10
-        `;
+        await client.query(`UPDATE problems SET name=$1, summary=$2, content=$3, difficulty=$4, problem_type=$5, data_description=$6, evaluation_script=$7, datasets=$8, cover_image_url=$9, updated_at=NOW() WHERE id=$10`, 
+            [name, summary, content, difficulty, problemType, dataDescription, evaluationScriptContent, JSON.stringify(newDatasets), coverImageUrl, id]);
 
-        await client.query(updateQuery, [
-            name, summary, content, difficulty, problemType,
-            dataDescription, evaluationScriptContent,
-            JSON.stringify(newDatasets), coverImageUrl, id
-        ]);
-
-        // Cập nhật Tags & Metrics
+        // Cập nhật Tags/Metrics (Ép kiểu số an toàn)
         await client.query('DELETE FROM problem_tags WHERE problem_id = $1', [id]);
         if (tagIds.length > 0) {
-            const values = tagIds.flatMap(tid => [id, tid]);
-            await client.query(
-                `INSERT INTO problem_tags (problem_id, tag_id) VALUES ${tagIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
-                values
-            );
+            const cleanTagIds = tagIds.map(Number).filter(n => !isNaN(n));
+            if (cleanTagIds.length > 0) {
+                const values = cleanTagIds.flatMap(tid => [id, tid]);
+                await client.query(`INSERT INTO problem_tags (problem_id, tag_id) VALUES ${cleanTagIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`, values);
+            }
         }
 
         await client.query('DELETE FROM problem_metrics WHERE problem_id = $1', [id]);
         if (metricIds.length > 0) {
-            const values = metricIds.flatMap(mid => [id, mid]);
-            await client.query(
-                `INSERT INTO problem_metrics (problem_id, metric_id) VALUES ${metricIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
-                values
-            );
+            const cleanMetricIds = metricIds.map(Number).filter(n => !isNaN(n));
+            if (cleanMetricIds.length > 0) {
+                const values = cleanMetricIds.flatMap(mid => [id, mid]);
+                await client.query(`INSERT INTO problem_metrics (problem_id, metric_id) VALUES ${cleanMetricIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`, values);
+            }
         }
 
-        // [QUAN TRỌNG] Đồng bộ lại dữ liệu
         await syncDenormalizedData(client, id, tagIds, metricIds);
 
-        // Cleanup
         filesToDelete.forEach(filePath => {
             try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) {}
         });
 
         await client.query('COMMIT');
-        res.json({ success: true, message: 'Cập nhật thành công' });
+        res.json({ success: true, message: 'Updated' });
 
     } catch (err) {
         await client.query('ROLLBACK');

@@ -15,7 +15,7 @@ export const SettingsPage: React.FC = () => {
         currentUser, setCurrentUser, users, setUsers, api, handleLogout,
         openConfirmModal, closeConfirmModal, setLoading, loading,
         imgSrc, setImgSrc,
-        isAvatarModalOpen, setIsAvatarModalOpen, originalFileName, setOriginalFileName,
+        isAvatarModalOpen, setIsAvatarModalOpen, setOriginalFileName,
         showToast, subscription, invoices, startPremiumCheckout, downloadInvoicePdf, refreshBilling,
     } = useAppContext();
 
@@ -24,7 +24,7 @@ export const SettingsPage: React.FC = () => {
     const [username, setUsername] = useState(currentUser?.username ?? "");
     const [email, setEmail] = useState(currentUser?.email ?? "");
     const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
-    const [redeemKey, setRedeemKey] = useState(""); // State cho nhập key
+    const [redeemKey, setRedeemKey] = useState("");
     const avatarFileRef = useRef<HTMLInputElement>(null);
 
     const [editingEducation, setEditingEducation] = useState<Education[]>(profile.education || []);
@@ -35,21 +35,66 @@ export const SettingsPage: React.FC = () => {
         return <Navigate to="/auth" replace />;
     }
 
-    // --- Avatar Upload Logic ---
+    // --- Avatar Select Logic ---
     const onSelectFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
             const file = e.target.files[0];
-            if (!file.type.startsWith('image/')) { showToast("Vui lòng chọn file ảnh.", "error"); return; }
-            if (file.size > 5 * 1024 * 1024) { showToast("Ảnh không quá 5MB.", "error"); return; }
+            console.log("1. [Avatar] File selected:", file.name, file.type, file.size);
+
+            if (!file.type.startsWith('image/')) { 
+                showToast("Vui lòng chọn file ảnh.", "error"); 
+                return; 
+            }
+            if (file.size > 5 * 1024 * 1024) { 
+                showToast("Ảnh không quá 5MB.", "error"); 
+                return; 
+            }
+            
             setOriginalFileName(file.name);
             const reader = new FileReader();
-            reader.onload = () => setImgSrc(reader.result?.toString() || '');
+            reader.onload = () => {
+                console.log("2. [Avatar] File read as DataURL success");
+                setImgSrc(reader.result?.toString() || '');
+                setIsAvatarModalOpen(true);
+            };
             reader.readAsDataURL(file);
-            setIsAvatarModalOpen(true); e.target.value = "";
+            e.target.value = ""; // Reset input
         }
     }, [setOriginalFileName, setImgSrc, setIsAvatarModalOpen, showToast]);
 
-    // --- Save Handler ---
+    // --- SỬA LỖI: Thêm hàm xử lý Lưu Avatar ---
+    const handleSaveAvatar = useCallback(async (file: File) => {
+        console.log("3. [Avatar] handleSaveAvatar triggered with file:", file);
+        setLoading(true);
+        
+        // Convert File (blob) sang Base64 để gửi lên server
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onloadend = async () => {
+            const base64data = reader.result as string;
+            console.log("4. [Avatar] Converted to Base64 length:", base64data.length);
+
+            try {
+                console.log("5. [Avatar] Sending PUT /users/me/avatar...");
+                const response = await api.put('/users/me/avatar', { avatarDataUrl: base64data });
+                console.log("6. [Avatar] Response success:", response);
+
+                // Cập nhật state local
+                setCurrentUser(prev => prev ? { ...prev, ...response.user } : response.user);
+                
+                showToast("Cập nhật ảnh đại diện thành công!", "success");
+                setIsAvatarModalOpen(false);
+                setImgSrc(''); // Clear ảnh tạm
+            } catch (err: any) {
+                console.error("X. [Avatar] Error saving:", err);
+                showToast(err.message || "Lỗi khi lưu ảnh đại diện.", "error");
+            } finally {
+                setLoading(false);
+            }
+        };
+    }, [api, setCurrentUser, setLoading, showToast, setIsAvatarModalOpen, setImgSrc]);
+
+    // --- Save Profile Handler ---
     const handleSave = useCallback(async () => {
         if (!currentUser || !username.trim() || !email.trim() || !/\S+@\S+\.\S+/.test(email.trim())) {
             showToast(!username.trim() || !email.trim() ? "Tên và Email không được trống." : "Email không hợp lệ.", "error"); return;
@@ -64,7 +109,7 @@ export const SettingsPage: React.FC = () => {
             showToast("Cập nhật thành công!", "success");
         } catch (err: any) { showToast(err.message || "Lỗi cập nhật.", "error"); }
         finally { setLoading(false); }
-    }, [currentUser, username, email, profile, editingEducation, editingWork, api, setCurrentUser, setUsers, setLoading, showToast]);
+    }, [currentUser, username, email, profile, editingEducation, editingWork, api, setCurrentUser, setUsers, setLoading, showToast, users]); // Added 'users' to deps
 
     // --- Billing Handlers ---
     const handleRedeemKey = async () => {
@@ -82,7 +127,6 @@ export const SettingsPage: React.FC = () => {
         }
     };
 
-    // --- Other Handlers (Password, Delete) omitted for brevity but kept same logic ---
     const handleChangePassword = useCallback(async (currentPass: string, newPass: string): Promise<boolean> => {
         if (!currentPass || !newPass || newPass.length < 6) {
             showToast("Mật khẩu không hợp lệ.", "error"); return false;
@@ -107,7 +151,6 @@ export const SettingsPage: React.FC = () => {
         setProfile(p => ({ ...p, notifications: { ...(p.notifications || {}), [key]: { ...(p.notifications?.[key] || { email: false, site: false }), [type]: value } } }));
     }, []);
 
-    // Education/Work Utils
     const addEducation = () => setEditingEducation(prev => [...prev, { id: Date.now(), school: '', degree: '', duration: '' }]);
     const removeEducation = (id: number) => setEditingEducation(prev => prev.filter(edu => edu.id !== id));
     const updateEducation = (id: number, field: keyof Education, value: string) => setEditingEducation(prev => prev.map(edu => edu.id === id ? { ...edu, [field]: value } : edu));
@@ -131,14 +174,20 @@ export const SettingsPage: React.FC = () => {
         { key: "newComments", label: "Bình luận mới" }, { key: "promotions", label: "Khuyến mãi/Ưu đãi" },
     ] as const;
 
-    // --- Common Styles (Replaces the <style> tag) ---
     const inputClass = "w-full px-3 py-2.5 bg-white border border-slate-300 rounded-lg text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none transition-all";
     const labelClass = "block text-sm font-semibold text-slate-700 mb-1.5";
     const sectionTitle = "text-xl font-bold text-slate-800 mb-5";
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 pb-12">
-             <AvatarCropModal isOpen={isAvatarModalOpen} onClose={() => { setIsAvatarModalOpen(false); setImgSrc(''); }} imgSrc={imgSrc} originalFileName={originalFileName} />
+            {/* SỬA LỖI: Truyền đúng props cho Modal (imageUrl và onSave) */}
+            <AvatarCropModal 
+                isOpen={isAvatarModalOpen} 
+                onClose={() => { setIsAvatarModalOpen(false); setImgSrc(''); }} 
+                imageUrl={imgSrc} 
+                onSave={handleSaveAvatar} 
+            />
+            
             <ChangePasswordModal isOpen={changePasswordModalOpen} onClose={() => setChangePasswordModalOpen(false)} onChangePassword={handleChangePassword} isChanging={loading}/>
 
             {/* Sidebar */}
@@ -148,7 +197,9 @@ export const SettingsPage: React.FC = () => {
                         <UserAvatar user={currentUser} size="w-28 h-28" textClass="text-5xl" />
                         <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="w-8 h-8 text-white" /></div>
                     </div>
-                    <input type="file" ref={avatarFileRef} hidden onChange={onSelectFile} accept="image/png, image/jpeg, image/gif"/>
+                    {/* Thêm accept chuẩn cho input file */}
+                    <input type="file" ref={avatarFileRef} hidden onChange={onSelectFile} accept="image/png, image/jpeg, image/jpg, image/gif"/>
+                    
                     <h3 className="font-bold text-xl text-slate-800 truncate w-full">{profile.realName || currentUser.username}</h3>
                     <p className="text-slate-500 text-sm">@{currentUser.username}</p>
                     {subscription?.status === 'active' && <span className="mt-2 px-3 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-full border border-amber-200 flex items-center gap-1"><Crown className="w-3 h-3" /> Premium</span>}

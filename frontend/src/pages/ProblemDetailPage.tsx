@@ -41,11 +41,11 @@ export const ProblemDetailPage: React.FC = () => {
     const id = params.problemId || params.id;
     const navigate = useNavigate();
     
-    // Lấy đầy đủ context bao gồm AI/Premium
+    // [FIX] Lấy thêm allTags từ context để map ID -> Name
     const { 
         currentUser, showToast, setEditingProblem, handleDeleteProblem, navigateToProfile,
         problemHint, setProblemHint, isGeneratingHint, handleGetHint, 
-        subscription, startPremiumCheckout 
+        subscription, startPremiumCheckout, allTags 
     } = useAppContext();
     
     const [problem, setProblem] = useState<Problem | null>(null);
@@ -65,11 +65,9 @@ export const ProblemDetailPage: React.FC = () => {
         currentUser.id === problem.authorId || currentUser.role === 'owner' || currentUser.role === 'admin'
     );
 
-    // Kiểm tra quyền Premium
     const isPremium = currentUser?.isPremium || subscription?.status === 'active';
 
     useEffect(() => {
-        // Reset hint khi chuyển bài toán
         setProblemHint(null);
     }, [id, setProblemHint]);
 
@@ -266,64 +264,44 @@ export const ProblemDetailPage: React.FC = () => {
                     <div className="lg:col-span-3 space-y-6">
                         <div className="sticky top-6 space-y-6">
                             
-                            {/* [RESTORED] AI HINT SECTION */}
+                            {/* AI Assistant */}
                             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 overflow-hidden">
                                 <div className="flex items-center gap-2 mb-3">
-                                    <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg text-white">
-                                        <Sparkles className="w-4 h-4" />
-                                    </div>
+                                    <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg text-white"><Sparkles className="w-4 h-4" /></div>
                                     <h4 className="font-bold text-slate-900 text-sm uppercase tracking-wide">AI Assistant</h4>
                                 </div>
-                                
                                 {!problemHint ? (
                                     <div className="text-center">
-                                        <p className="text-xs text-slate-500 mb-3">
-                                            Bí ý tưởng? Hãy để AI gợi ý hướng đi cho bạn.
-                                        </p>
-                                        <button 
-                                            onClick={isPremium ? handleGetHint : () => startPremiumCheckout()}
-                                            disabled={isGeneratingHint}
-                                            className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-2 ${
-                                                isPremium 
-                                                ? 'bg-slate-900 text-white hover:bg-slate-800' 
-                                                : 'bg-gradient-to-r from-amber-400 to-orange-500 text-white hover:shadow-md'
-                                            }`}
-                                        >
-                                            {isGeneratingHint ? <LoadingSpinner size="xs" color="white"/> : (
-                                                <>
-                                                    {!isPremium && <Crown className="w-3 h-3" />}
-                                                    {isPremium ? 'Lấy gợi ý ngay' : 'Mở khóa Premium'}
-                                                </>
-                                            )}
+                                        <p className="text-xs text-slate-500 mb-3">Bí ý tưởng? Hãy để AI gợi ý hướng đi cho bạn.</p>
+                                        <button onClick={isPremium ? handleGetHint : () => startPremiumCheckout()} disabled={isGeneratingHint} className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-2 ${isPremium ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-gradient-to-r from-amber-400 to-orange-500 text-white hover:shadow-md'}`}>
+                                            {isGeneratingHint ? <LoadingSpinner size="xs" color="white"/> : <>{!isPremium && <Crown className="w-3 h-3" />}{isPremium ? 'Lấy gợi ý ngay' : 'Mở khóa Premium'}</>}
                                         </button>
                                     </div>
                                 ) : (
                                     <div className="animate-fade-in">
-                                        <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-xs text-slate-700 prose prose-sm max-w-none">
-                                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{problemHint}</ReactMarkdown>
-                                        </div>
+                                        <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-xs text-slate-700 prose prose-sm max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{problemHint}</ReactMarkdown></div>
                                         <button onClick={() => setProblemHint(null)} className="mt-2 w-full text-xs text-slate-400 hover:text-slate-600">Đóng gợi ý</button>
                                     </div>
                                 )}
                             </div>
 
-                            {/* Tags */}
+                            {/* [FIXED] Tags Section */}
                             {problem.tags && problem.tags.length > 0 && (
                                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-                                    <h4 className="font-bold text-slate-900 text-sm mb-3 flex items-center gap-2 uppercase tracking-wide">
-                                        <Tag className="w-4 h-4 text-slate-500"/> Tags
-                                    </h4>
+                                    <h4 className="font-bold text-slate-900 text-sm mb-3 flex items-center gap-2 uppercase tracking-wide"><Tag className="w-4 h-4 text-slate-500"/> Tags</h4>
                                     <div className="flex flex-wrap gap-2">
-                                        {problem.tags.map((tag: any) => (
-                                            <span key={tag} className="px-2.5 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg border border-slate-200 hover:bg-slate-200 transition-colors cursor-default">
-                                                {tag}
-                                            </span>
-                                        ))}
+                                        {problem.tags.map((tagId: any) => {
+                                            const tagName = allTags.find(t => t.id === tagId)?.name || `Tag ${tagId}`;
+                                            return (
+                                                <span key={tagId} className="px-2.5 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg border border-slate-200 hover:bg-slate-200 transition-colors cursor-default">
+                                                    {tagName}
+                                                </span>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )}
 
-                            {/* TOC */}
                             {((activeTab === 'overview' || activeTab === 'data') && currentTOC.length > 0) && (
                                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                                     <div className="bg-slate-50/80 px-5 py-4 border-b border-slate-200"><h4 className="font-bold text-slate-700 text-xs uppercase tracking-wider flex items-center gap-2"><List className="w-4 h-4"/> Mục lục</h4></div>
@@ -334,6 +312,8 @@ export const ProblemDetailPage: React.FC = () => {
                                     </div>
                                 </div>
                             )}
+                            
+                            {/* [FIXED] Đã xóa phần "Cơ chế chấm" theo yêu cầu của bạn */}
                         </div>
                     </div>
                 </div>
