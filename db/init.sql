@@ -20,7 +20,7 @@ CREATE TABLE users (
 CREATE TABLE tags ( id SERIAL PRIMARY KEY, name VARCHAR(50) UNIQUE NOT NULL );
 CREATE TABLE metrics ( id SERIAL PRIMARY KEY, key VARCHAR(50) UNIQUE NOT NULL, direction VARCHAR(10) NOT NULL ); -- direction: 'maximize' or 'minimize'
 
--- Problems Table (Updated with new columns)
+-- Problems Table (Updated to match backend logic)
 CREATE TABLE problems (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -32,6 +32,10 @@ CREATE TABLE problems (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     datasets JSONB, -- Stores array of {split, filename, path, sizeBytes?} metadata
+    
+    -- [ADDED] Missing column required by submissions.js
+    ground_truth_path TEXT, 
+    
     evaluation_script TEXT, -- Stores the Python evaluation script content
     cover_image_url TEXT, -- Path or URL to cover image
     data_description TEXT, -- Description of data
@@ -147,6 +151,7 @@ CREATE TABLE votes (
 -- INITIAL DATA --
 
 -- Sample User (Owner)
+-- Password is 'admin123' hashed with bcrypt
 INSERT INTO users (id, username, email, password_hash, role, avatar_color, profile, is_premium) VALUES
 (1, 'admin', 'admin@mljudge.com', '$2b$10$WLijFpXO4G5XS9M7olwHnOsi8DQ0ofknVXYQCfSBIYuU21bSOofs6', 'owner', 'bg-red-600', '{"realName": "Admin", "skills": [], "education": [], "workExperience": [], "allowJobContact": true, "showOnLeaderboard": true, "showSubmissionHistory": true}', TRUE);
 
@@ -198,18 +203,21 @@ BEGIN
         );
         
         -- Delete problem files
-        FOR dataset IN SELECT * FROM jsonb_array_elements(NEW.datasets)
-        LOOP
-            file_path := dataset->>'path';
-            IF file_path IS NOT NULL THEN
-                PERFORM pg_notify('cleanup_files',
-                    json_build_object(
-                        'type', 'problem_file',
-                        'path', file_path
-                    )::text
-                );
-            END IF;
-        END LOOP;
+        -- Handle datasets array safely
+        IF NEW.datasets IS NOT NULL AND jsonb_typeof(NEW.datasets) = 'array' THEN
+            FOR dataset IN SELECT * FROM jsonb_array_elements(NEW.datasets)
+            LOOP
+                file_path := dataset->>'path';
+                IF file_path IS NOT NULL THEN
+                    PERFORM pg_notify('cleanup_files',
+                        json_build_object(
+                            'type', 'problem_file',
+                            'path', file_path
+                        )::text
+                    );
+                END IF;
+            END LOOP;
+        END IF;
     END IF;
     RETURN NEW;
 END;
