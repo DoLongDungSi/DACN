@@ -3,29 +3,38 @@ const router = express.Router();
 const pool = require('../config/db');
 const { authMiddleware, optionalAuth } = require('../middleware/auth');
 const { toCamelCase } = require('../utils/helpers');
+// [QUAN TRỌNG] Sử dụng middleware uploadProblemFiles từ storage để lưu file xuống ổ cứng
+// Nếu dùng multer mặc định thì file chỉ nằm trên RAM -> Lỗi khi tạo bài toán
 const { uploadProblemFiles, resolveFilePath, UPLOADS_ROOT } = require('../utils/storage');
 const fs = require('fs');
 const path = require('path');
 
-// --- Helper: Xóa file vật lý ---
+// --- Helper: Xóa file vật lý khi xóa bài toán ---
 const deleteProblemFiles = (datasets, coverImage) => {
+    // Xóa các file dataset (train, test, ground_truth)
     if (Array.isArray(datasets)) {
         datasets.forEach(ds => {
             try {
                 const p = path.join(UPLOADS_ROOT, ds.path);
                 if (fs.existsSync(p)) fs.unlinkSync(p);
-            } catch (e) { console.error("Error deleting file:", e.message); }
+            } catch (e) { 
+                console.error("Error deleting file:", e.message); 
+            }
         });
     }
+    // Xóa ảnh bìa
     if (coverImage && coverImage.startsWith('/uploads/')) {
         try {
             const p = path.join(UPLOADS_ROOT, path.basename(coverImage));
             if (fs.existsSync(p)) fs.unlinkSync(p);
-        } catch (e) { console.error("Error deleting cover:", e.message); }
+        } catch (e) { 
+            console.error("Error deleting cover:", e.message); 
+        }
     }
 };
 
-// --- Helper: Đồng bộ Tags & Metrics ---
+// --- Helper: Đồng bộ Tags & Metrics vào cột JSON (Denormalization) ---
+// Giúp việc tìm kiếm và hiển thị nhanh hơn mà không cần join bảng liên tục
 const syncDenormalizedData = async (client, problemId, tagIds, metricIds) => {
     let tagNames = [];
     let metricKeys = [];
@@ -46,9 +55,15 @@ const syncDenormalizedData = async (client, problemId, tagIds, metricIds) => {
     );
 };
 
-// GET: Lấy danh sách
+// ============================================================================
+// ROUTES
+// ============================================================================
+
+// 1. GET / - Lấy danh sách bài toán
 router.get('/', optionalAuth, async (req, res) => {
     try {
+        // Lấy danh sách problem, kèm theo mảng ID của tags và metrics
+        // Sử dụng subquery json_agg để gom nhóm ID ngay trong SQL
         const result = await pool.query(`
             SELECT p.*, u.username as author_name,
             (SELECT COALESCE(json_agg(tag_id), '[]') FROM problem_tags WHERE problem_id = p.id) as tag_ids,
@@ -58,11 +73,12 @@ router.get('/', optionalAuth, async (req, res) => {
             ORDER BY p.created_at DESC
         `);
         
+        // Map dữ liệu để frontend dễ sử dụng
         const problems = result.rows.map(row => ({
             ...row,
-            tags: row.tag_ids || [], 
-            metrics: row.metric_ids || [],
-            // Fallback cho tên tag nếu cần hiển thị ngay
+            tags: row.tag_ids || [],       // Frontend cần mảng ID để filter
+            metrics: row.metric_ids || [], // Frontend cần mảng ID để filter
+            // Giữ lại tên tag (từ cột JSON tags) để hiển thị nhanh nếu cần
             tagsJson: typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags
         }));
 
@@ -73,7 +89,7 @@ router.get('/', optionalAuth, async (req, res) => {
     }
 });
 
-// GET: Chi tiết
+// 2. GET /:id - Lấy chi tiết bài toán
 router.get('/:id', optionalAuth, async (req, res) => {
     try {
         const { id } = req.params;
@@ -86,28 +102,36 @@ router.get('/:id', optionalAuth, async (req, res) => {
             WHERE p.id = $1
         `, [id]);
 
-        if (result.rows.length === 0) return res.status(404).json({ message: 'Problem not found' });
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Problem not found' });
+        }
 
         const problem = result.rows[0];
+        
+        // Parse datasets từ JSONB
+        const datasets = typeof problem.datasets === 'string' ? JSON.parse(problem.datasets) : (problem.datasets || []);
+        
         const parsedProblem = {
             ...problem,
+            // [FIX QUAN TRỌNG] Gán tag_ids vào tags để Form Editor hiển thị đúng các tag đã chọn
             tags: problem.tag_ids || [], 
             metrics: problem.metric_ids || [],
-            datasets: typeof problem.datasets === 'string' ? JSON.parse(problem.datasets) : (problem.datasets || [])
+            datasets: datasets
         };
 
-        let datasets = parsedProblem.datasets;
+        // Lọc dataset: Ẩn ground_truth nếu không phải Owner/Admin
+        let filteredDatasets = parsedProblem.datasets;
         const isOwner = req.userId && req.userId === problem.author_id;
         const isAdmin = req.userRole === 'admin';
 
         if (!isOwner && !isAdmin) {
-            datasets = datasets.filter(d => d.split !== 'ground_truth');
+            filteredDatasets = filteredDatasets.filter(d => d.split !== 'ground_truth');
         }
 
         res.json({
             problem: {
                 ...toCamelCase(parsedProblem),
-                datasets: datasets.map(d => toCamelCase(d)),
+                datasets: filteredDatasets.map(d => toCamelCase(d)),
                 evaluationScript: parsedProblem.evaluation_script
             }
         });
@@ -117,7 +141,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
     }
 });
 
-// GET: Download
+// 3. GET /:id/download/:fileName - Tải file dataset
 router.get('/:id/download/:fileName', optionalAuth, async (req, res) => {
     try {
         const { id, fileName } = req.params;
@@ -126,10 +150,13 @@ router.get('/:id/download/:fileName', optionalAuth, async (req, res) => {
         
         const problem = probRes.rows[0];
         const datasets = problem.datasets || [];
+        
+        // Tìm file trong danh sách datasets
         const targetFile = datasets.find(d => d.file_name === fileName || d.path.endsWith(fileName) || path.basename(d.path) === fileName);
 
-        if (!targetFile) return res.status(404).json({ message: 'File not associated' });
+        if (!targetFile) return res.status(404).json({ message: 'File not associated with this problem' });
 
+        // Kiểm tra quyền tải file ground_truth (Đáp án)
         if (targetFile.split === 'ground_truth') {
             const isOwner = req.userId && req.userId === problem.author_id;
             const isAdmin = req.userRole === 'admin';
@@ -137,7 +164,7 @@ router.get('/:id/download/:fileName', optionalAuth, async (req, res) => {
         }
 
         const absolutePath = resolveFilePath(targetFile.path);
-        if (!fs.existsSync(absolutePath)) return res.status(404).json({ message: 'File content missing' });
+        if (!fs.existsSync(absolutePath)) return res.status(404).json({ message: 'File content missing on server' });
 
         res.download(absolutePath, targetFile.file_name || fileName);
     } catch (err) {
@@ -146,34 +173,37 @@ router.get('/:id/download/:fileName', optionalAuth, async (req, res) => {
     }
 });
 
-// [ĐÃ KHÔI PHỤC] POST: Generate AI Hint
+// 4. POST /:id/hint - Tạo gợi ý AI (TÍNH NĂNG CAO CẤP)
 router.post('/:id/hint', authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.userId;
 
-        // 1. Check Premium
+        // Kiểm tra User có gói Premium không
         const userRes = await pool.query('SELECT is_premium FROM users WHERE id = $1', [userId]);
         if (userRes.rows.length === 0) return res.status(404).json({ message: 'User not found' });
         
-        // 2. Get Problem Context
-        const probRes = await pool.query('SELECT name, content, summary, problem_type FROM problems WHERE id = $1', [id]);
+        // Lấy thông tin bài toán để làm ngữ cảnh cho AI
+        const probRes = await pool.query('SELECT name, content, summary, problem_type, data_description FROM problems WHERE id = $1', [id]);
         if (probRes.rows.length === 0) return res.status(404).json({ message: 'Problem not found' });
         const problem = probRes.rows[0];
 
-        // 3. Setup OpenRouter
+        // Lấy API Key từ biến môi trường
         const apiKey = process.env.OPENROUTER_API_KEY;
         if (!apiKey) return res.status(503).json({ message: 'AI Service unavailable (Missing Key)' });
 
         const systemPrompt = process.env.HINT_SYSTEM_PROMPT || "You are a helpful AI assistant for Data Science competitions.";
+        
+        // Tạo Prompt ngữ cảnh
         const problemContext = `
-            Problem: ${problem.name}
+            Problem Name: ${problem.name}
             Type: ${problem.problem_type}
             Summary: ${problem.summary || ''}
-            Description (excerpt): ${problem.content ? problem.content.substring(0, 800) : 'No description'}
+            Description (Excerpt): ${problem.content ? problem.content.substring(0, 1000) : 'No description'}
+            Data Description: ${problem.data_description ? problem.data_description.substring(0, 500) : ''}
         `;
 
-        // 4. Call API
+        // Gọi OpenRouter API
         const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -185,7 +215,7 @@ router.post('/:id/hint', authMiddleware, async (req, res) => {
                 model: process.env.OPENROUTER_MODEL || "google/gemini-2.0-flash-lite-preview-02-05:free",
                 messages: [
                     { role: "system", content: systemPrompt },
-                    { role: "user", content: `Please provide a helpful hint for this problem, focusing on approach rather than code:\n${problemContext}` }
+                    { role: "user", content: `Please provide a helpful hint for this problem, focusing on approach rather than giving the solution:\n${problemContext}` }
                 ],
                 temperature: 0.7,
                 max_tokens: 400
@@ -209,13 +239,14 @@ router.post('/:id/hint', authMiddleware, async (req, res) => {
     }
 });
 
-// PUT: Freeze
+// 5. PUT /:id/freeze - Khóa/Mở khóa bài toán
 router.put('/:id/freeze', authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const check = await pool.query('SELECT author_id, is_frozen FROM problems WHERE id = $1', [id]);
         if (check.rows.length === 0) return res.status(404).json({ message: 'Problem not found' });
         
+        // Chỉ Admin hoặc Owner mới được quyền khóa
         if (req.userRole !== 'admin' && check.rows[0].author_id !== req.userId) {
             return res.status(403).json({ message: 'Unauthorized' });
         }
@@ -223,14 +254,14 @@ router.put('/:id/freeze', authMiddleware, async (req, res) => {
         const newState = !check.rows[0].is_frozen;
         await pool.query('UPDATE problems SET is_frozen = $1 WHERE id = $2', [newState, id]);
 
-        res.json({ success: true, isFrozen: newState, message: `Status updated` });
+        res.json({ success: true, isFrozen: newState, message: `Status updated to ${newState ? 'Frozen' : 'Active'}` });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server Error' });
     }
 });
 
-// DELETE
+// 6. DELETE /:id - Xóa bài toán
 router.delete('/:id', authMiddleware, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -246,12 +277,14 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 
         const { datasets, cover_image_url } = check.rows[0];
 
+        // Xóa DB trước
         await client.query('DELETE FROM problems WHERE id = $1', [id]);
         await client.query('COMMIT');
 
+        // Xóa file sau khi DB thành công
         deleteProblemFiles(datasets, cover_image_url);
 
-        res.json({ success: true, message: 'Deleted' });
+        res.json({ success: true, message: 'Deleted successfully' });
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Delete Error:', err);
@@ -261,11 +294,13 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     }
 });
 
-// POST: Create
+// 7. POST / - Tạo bài toán mới
+// Sử dụng uploadProblemFiles để lưu file vào thư mục uploads
 router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        
         if (!req.body.problemData) throw new Error('Missing problemData');
 
         const problemData = JSON.parse(req.body.problemData);
@@ -275,13 +310,14 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
             tagIds = [], metricIds = []
         } = problemData;
 
-        if (!name || !difficulty) throw new Error('Name/Difficulty required');
+        if (!name || !difficulty) throw new Error('Name and Difficulty are required');
 
+        // Helper tạo object dataset để lưu vào DB
         const createDatasetEntry = (file, split) => {
             if (!file) return null;
             return {
                 split,
-                path: path.relative(UPLOADS_ROOT, file.path),
+                path: path.relative(UPLOADS_ROOT, file.path), // Lưu đường dẫn tương đối
                 file_name: file.filename,
                 original_name: file.originalname,
                 size: file.size
@@ -312,7 +348,7 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
         
         const problemId = probRes.rows[0].id;
 
-        // Xử lý Tags/Metrics với ép kiểu số an toàn
+        // Lưu Tags vào bảng trung gian
         if (tagIds.length > 0) {
             const cleanTagIds = tagIds.map(Number).filter(n => !isNaN(n));
             if (cleanTagIds.length > 0) {
@@ -323,6 +359,7 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
                 );
             }
         }
+        // Lưu Metrics vào bảng trung gian
         if (metricIds.length > 0) {
             const cleanMetricIds = metricIds.map(Number).filter(n => !isNaN(n));
             if (cleanMetricIds.length > 0) {
@@ -334,6 +371,7 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
             }
         }
 
+        // Đồng bộ dữ liệu Denormalized
         await syncDenormalizedData(client, problemId, tagIds, metricIds);
 
         await client.query('COMMIT');
@@ -347,14 +385,16 @@ router.post('/', authMiddleware, uploadProblemFiles, async (req, res) => {
     }
 });
 
-// PUT: Update
+// 8. PUT /:id - Cập nhật bài toán
 router.put('/:id', authMiddleware, uploadProblemFiles, async (req, res) => {
     const client = await pool.connect();
     try {
         const { id } = req.params;
         await client.query('BEGIN');
+
         if (!req.body.problemData) throw new Error('Missing problemData');
 
+        // Kiểm tra quyền sở hữu
         const checkRes = await client.query('SELECT author_id, datasets FROM problems WHERE id = $1', [id]);
         if (checkRes.rows.length === 0) throw new Error('Not found');
         if (req.userRole !== 'admin' && checkRes.rows[0].author_id !== req.userId) throw new Error('Unauthorized');
@@ -370,6 +410,7 @@ router.put('/:id', authMiddleware, uploadProblemFiles, async (req, res) => {
 
         if (!name) throw new Error('Name required');
 
+        // Logic xử lý file cập nhật (Thay thế file cũ)
         const createDatasetEntry = (file, split) => ({
             split,
             path: path.relative(UPLOADS_ROOT, file.path),
@@ -395,36 +436,56 @@ router.put('/:id', authMiddleware, uploadProblemFiles, async (req, res) => {
 
         const coverImageUrl = req.files['coverImage'] ? `/uploads/${req.files['coverImage'][0].filename}` : problemData.coverImageUrl;
 
-        await client.query(`UPDATE problems SET name=$1, summary=$2, content=$3, difficulty=$4, problem_type=$5, data_description=$6, evaluation_script=$7, datasets=$8, cover_image_url=$9, updated_at=NOW() WHERE id=$10`, 
-            [name, summary, content, difficulty, problemType, dataDescription, evaluationScriptContent, JSON.stringify(newDatasets), coverImageUrl, id]);
+        const updateQuery = `
+            UPDATE problems SET
+                name = $1, summary = $2, content = $3, difficulty = $4,
+                problem_type = $5, data_description = $6, evaluation_script = $7,
+                datasets = $8, cover_image_url = $9, updated_at = NOW()
+            WHERE id = $10
+        `;
 
-        // Cập nhật Tags/Metrics (Ép kiểu số an toàn)
+        await client.query(updateQuery, [
+            name, summary, content, difficulty, problemType,
+            dataDescription, evaluationScriptContent,
+            JSON.stringify(newDatasets), coverImageUrl, id
+        ]);
+
+        // Cập nhật Tags
         await client.query('DELETE FROM problem_tags WHERE problem_id = $1', [id]);
         if (tagIds.length > 0) {
             const cleanTagIds = tagIds.map(Number).filter(n => !isNaN(n));
             if (cleanTagIds.length > 0) {
                 const values = cleanTagIds.flatMap(tid => [id, tid]);
-                await client.query(`INSERT INTO problem_tags (problem_id, tag_id) VALUES ${cleanTagIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`, values);
+                await client.query(
+                    `INSERT INTO problem_tags (problem_id, tag_id) VALUES ${cleanTagIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
+                    values
+                );
             }
         }
 
+        // Cập nhật Metrics
         await client.query('DELETE FROM problem_metrics WHERE problem_id = $1', [id]);
         if (metricIds.length > 0) {
             const cleanMetricIds = metricIds.map(Number).filter(n => !isNaN(n));
             if (cleanMetricIds.length > 0) {
                 const values = cleanMetricIds.flatMap(mid => [id, mid]);
-                await client.query(`INSERT INTO problem_metrics (problem_id, metric_id) VALUES ${cleanMetricIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`, values);
+                await client.query(
+                    `INSERT INTO problem_metrics (problem_id, metric_id) VALUES ${cleanMetricIds.map((_, i) => `($${i*2+1}, $${i*2+2})`).join(',')}`,
+                    values
+                );
             }
         }
 
+        // Đồng bộ lại
         await syncDenormalizedData(client, id, tagIds, metricIds);
 
+        // Xóa file rác
         filesToDelete.forEach(filePath => {
             try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) {}
         });
 
         await client.query('COMMIT');
-        res.json({ success: true, message: 'Updated' });
+        res.json({ success: true, message: 'Updated successfully' });
 
     } catch (err) {
         await client.query('ROLLBACK');

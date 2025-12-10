@@ -34,7 +34,7 @@ services:
       NODE_ENV: production
       PORT: 5001
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.0-flash-lite-preview-02-05:free}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-arcee-ai/trinity-mini:free}
       HINT_SYSTEM_PROMPT: ${HINT_SYSTEM_PROMPT:-You are a helpful AI assistant specialized in Data Science.}
     volumes:
       - ./db/data:/db/data
