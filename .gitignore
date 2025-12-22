@@ -201,3 +201,5 @@ pyrightconfig.json
 docx/
 
 .env
+
+db/data/

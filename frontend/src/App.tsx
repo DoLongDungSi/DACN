@@ -1,141 +1,107 @@
-import React, { useState } from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './contexts/AppContext';
 import { useAppContext } from './hooks/useAppContext';
-import { Header } from './components/Header';
-import { Sidebar } from './components/Sidebar';
-import { RightSidebar } from './components/RightSidebar'; // Import mới
+import { ToastProvider } from './contexts/ToastContext';
+
+// Components
+import Sidebar from './components/Sidebar';
+import Header from './components/Header';
+import { LoadingSpinner } from './components/Common/LoadingSpinner';
+import { ConfirmModal } from './components/Common/ConfirmModal'; // [THÊM] Import Modal
+
+// Pages
 import { AuthPage } from './pages/AuthPage';
 import { ProblemsListPage } from './pages/ProblemsListPage';
 import { ProblemDetailPage } from './pages/ProblemDetailPage';
-import { MySubmissionsPage } from './pages/MySubmissionsPage';
-import { ProfilePage } from './pages/ProfilePage';
-import { AdminPage } from './pages/AdminPage';
 import { ProblemEditorPage } from './pages/ProblemEditorPage';
+import { ProfilePage } from './pages/ProfilePage';
+import { MySubmissionsPage } from './pages/MySubmissionsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AdminPage } from './pages/AdminPage';
 import { BillingPage } from './pages/BillingPage';
-import { ConfirmModal } from './components/Common/ConfirmModal';
-import { LoadingSpinner } from './components/Common/LoadingSpinner';
-import { Toast } from './components/Common/Toast';
 
-const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
-    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
-    return (
-        <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans">
-            {/* Header */}
-            <Header 
-                onAvatarClick={() => setIsRightSidebarOpen(true)} 
-                onMenuClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            />
-            
-            {/* Right User Sidebar (Drawer) */}
-            <RightSidebar 
-                isOpen={isRightSidebarOpen} 
-                onClose={() => setIsRightSidebarOpen(false)} 
-            />
-
-            <div className="flex flex-1 max-w-[1600px] mx-auto w-full">
-                {/* Left Sidebar (Navigation) - Connected conceptually to Logo area */}
-                <div className={`
-                    fixed lg:sticky top-16 left-0 h-[calc(100vh-4rem)] w-64 bg-white lg:bg-transparent border-r lg:border-none border-slate-200 z-30 
-                    transform lg:transform-none transition-transform duration-300 ease-in-out
-                    ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-                `}>
-                    <div className="h-full overflow-y-auto py-6 pl-4 pr-2">
-                        <Sidebar onCloseMobile={() => setIsMobileMenuOpen(false)} />
-                    </div>
-                </div>
-
-                {/* Mobile Backdrop */}
-                {isMobileMenuOpen && (
-                    <div 
-                        className="fixed inset-0 bg-black/20 backdrop-blur-sm z-20 lg:hidden"
-                        onClick={() => setIsMobileMenuOpen(false)}
-                    />
-                )}
-                
-                {/* Main Content */}
-                <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-8">
-                    {children}
-                </main>
-            </div>
-        </div>
-    );
+// --- Guards ---
+const AdminRoute = ({ children }: { children: React.ReactNode }) => {
+  const { currentUser, loading } = useAppContext();
+  if (loading) return <div className="h-screen flex items-center justify-center"><LoadingSpinner /></div>;
+  if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'owner')) return <Navigate to="/" replace />;
+  return <>{children}</>;
 };
 
-const FullWidthLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    return (
-        <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col">
-             {/* Simplified Header for Full Width Pages if needed, or just content */}
-            <main className="flex-1 relative">
-                 {children}
-            </main>
-        </div>
-    );
+const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
+  const { currentUser, loading } = useAppContext();
+  if (loading) return <div className="h-screen flex items-center justify-center"><LoadingSpinner /></div>;
+  if (!currentUser) return <Navigate to="/auth" replace />;
+  return <>{children}</>;
+};
+
+const PublicOnlyRoute = ({ children }: { children: React.ReactNode }) => {
+  const { currentUser, loading } = useAppContext();
+  if (loading) return <div className="h-screen flex items-center justify-center"><LoadingSpinner /></div>;
+  if (currentUser) return <Navigate to="/" replace />; 
+  return <>{children}</>;
+};
+
+// --- Layout ---
+const MainLayout = ({ children }: { children: React.ReactNode }) => {
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <Header />
+      <div className="flex flex-1 pt-16">
+        <Sidebar />
+        <main className="flex-1 w-full md:ml-64 p-6 overflow-x-hidden">
+          <div className="max-w-7xl mx-auto">
+            {children}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+};
+
+function App() {
+  return (
+    <Router>
+      <AppProvider>
+        <ToastProvider>
+          {/* [THÊM] Đặt ConfirmModal ở đây để dùng được toàn app */}
+          <ConfirmModal /> 
+          
+          <Routes>
+            <Route path="/auth" element={
+              <PublicOnlyRoute>
+                <AuthPage />
+              </PublicOnlyRoute>
+            } />
+            
+            <Route path="*" element={
+              <MainLayout>
+                <Routes>
+                  <Route path="/" element={<Navigate to="/problems" replace />} />
+                  <Route path="/problems" element={<ProblemsListPage />} />
+                  <Route path="/problems/:id" element={<ProblemDetailPage />} />
+                  
+                  <Route path="/problems/create" element={<AdminRoute><ProblemEditorPage /></AdminRoute>} />
+                  <Route path="/problems/:id/edit" element={<AdminRoute><ProblemEditorPage /></AdminRoute>} />
+                  <Route path="/problem-editor" element={<AdminRoute><ProblemEditorPage /></AdminRoute>} />
+                  <Route path="/problem-editor/:id" element={<AdminRoute><ProblemEditorPage /></AdminRoute>} />
+
+                  <Route path="/profile" element={<PrivateRoute><ProfilePage /></PrivateRoute>} />
+                  <Route path="/profile/:identifier" element={<PrivateRoute><ProfilePage /></PrivateRoute>} />
+                  <Route path="/my-submissions" element={<PrivateRoute><MySubmissionsPage /></PrivateRoute>} />
+                  <Route path="/settings" element={<PrivateRoute><SettingsPage /></PrivateRoute>} />
+                  <Route path="/billing" element={<PrivateRoute><BillingPage /></PrivateRoute>} />
+                  <Route path="/admin/*" element={<AdminRoute><AdminPage /></AdminRoute>} />
+                  <Route path="/discussions" element={<div className="p-4">Discussion Page (Coming Soon)</div>} />
+                </Routes>
+              </MainLayout>
+            } />
+          </Routes>
+        </ToastProvider>
+      </AppProvider>
+    </Router>
+  );
 }
-
-const AppContent: React.FC = () => {
-    const { currentView, loading, toastMessage, toastType, clearToast } = useAppContext();
-    const location = useLocation();
-
-    if (currentView === "loading") {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-slate-50">
-                <LoadingSpinner />
-                <p className="ml-4 text-slate-600 font-medium animate-pulse">Đang tải dữ liệu...</p>
-            </div>
-        );
-    }
-
-    if (currentView === "auth") {
-        return <AuthPage />;
-    }
-
-    const isFullWidth = location.pathname.startsWith('/problem-editor');
-
-    return (
-        <>
-            {loading && <LoadingSpinner overlay={true} />}
-            
-            {isFullWidth ? (
-                <FullWidthLayout>
-                     <Routes>
-                        <Route path="/problem-editor" element={<ProblemEditorPage />} />
-                    </Routes>
-                </FullWidthLayout>
-            ) : (
-                <MainLayout>
-                    <Routes>
-                        <Route path="/" element={<ProblemsListPage />} />
-                        <Route path="/problems" element={<ProblemsListPage />} />
-                        <Route path="/problems/:problemId" element={<ProblemDetailPage />} />
-                        <Route path="/my-submissions" element={<MySubmissionsPage />} />
-                        <Route path="/profile" element={<ProfilePage />} />
-                        <Route path="/profile/:identifier" element={<ProfilePage />} />
-                        <Route path="/admin" element={<AdminPage />} />
-                        <Route path="/settings" element={<SettingsPage />} />
-                        <Route path="/billing" element={<BillingPage />} />
-                        <Route path="*" element={<Navigate to="/problems" replace />} />
-                    </Routes>
-                </MainLayout>
-            )}
-            
-            <ConfirmModal />
-            {toastMessage && toastType && (
-                <Toast message={toastMessage} type={toastType} onClose={clearToast} />
-            )}
-        </>
-    );
-};
-
-const App: React.FC = () => {
-    return (
-        <AppProvider>
-            <AppContent />
-        </AppProvider>
-    );
-};
 
 export default App;

@@ -5,9 +5,9 @@ import { useAppContext } from '../hooks/useAppContext';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 import { 
     Upload, FileText, Trophy, Download, CheckCircle2, XCircle, 
-    List, Database, Clock, Edit, Trash2, Lock, Unlock, MessageSquare, 
+    List, Database, Edit, Trash2, Lock, Unlock, MessageSquare, 
     ChevronLeft, X, Send, AlertCircle, FileSpreadsheet, Trash, Tag,
-    Lightbulb, Crown, Sparkles
+    Sparkles, Crown, AlertTriangle // [THÊM] Import AlertTriangle
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,6 +18,36 @@ import { formatFileName, formatDate, getStatusColor, getStatusText } from '../ut
 import type { Problem, Submission } from '../types';
 import { DiscussionComponent } from '../components/Discussion';
 import 'katex/dist/katex.min.css';
+
+// [THÊM] Component Modal Xóa Cục Bộ - Đảm bảo luôn hiển thị đẹp
+const DeleteProblemModal = ({ isOpen, onClose, onConfirm, isDeleting, problemName }: { isOpen: boolean; onClose: () => void; onConfirm: () => void; isDeleting: boolean; problemName: string }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 transform transition-all scale-100">
+                <div className="flex items-center gap-4 mb-4">
+                    <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                        <AlertTriangle className="w-6 h-6 text-red-600" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-900">Xóa bài toán?</h3>
+                        <p className="text-sm text-slate-500 mt-1">
+                            Bạn có chắc chắn muốn xóa <span className="font-bold text-slate-800">"{problemName}"</span>? 
+                            <br/>Hành động này sẽ xóa toàn bộ dữ liệu, bài nộp và thảo luận liên quan. Không thể hoàn tác.
+                        </p>
+                    </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-6">
+                    <button onClick={onClose} disabled={isDeleting} className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors">Hủy bỏ</button>
+                    <button onClick={onConfirm} disabled={isDeleting} className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-red-200">
+                        {isDeleting ? <LoadingSpinner size="xs" color="white"/> : <Trash2 className="w-4 h-4"/>}
+                        {isDeleting ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const extractHeadings = (markdown: string | undefined) => {
     if (!markdown) return [];
@@ -41,23 +71,28 @@ export const ProblemDetailPage: React.FC = () => {
     const id = params.problemId || params.id;
     const navigate = useNavigate();
     
-    // [FIX] Lấy thêm allTags từ context để map ID -> Name
+    // [FIX] Chỉ lấy những hàm cơ bản, không phụ thuộc vào confirmModal của Context
     const { 
-        currentUser, showToast, setEditingProblem, handleDeleteProblem, navigateToProfile,
+        currentUser, showToast, setEditingProblem, 
         problemHint, setProblemHint, isGeneratingHint, handleGetHint, 
-        subscription, startPremiumCheckout, allTags 
+        subscription, startPremiumCheckout, allTags,
+        fetchAllData // Để refresh list sau khi xóa
     } = useAppContext();
     
     const [problem, setProblem] = useState<Problem | null>(null);
     const [mySubmissions, setMySubmissions] = useState<Submission[]>([]);
     const [leaderboard, setLeaderboard] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [pageLoading, setPageLoading] = useState(true);
     
     const [activeTab, setActiveTab] = useState<'overview' | 'data' | 'discussion' | 'leaderboard' | 'my_submissions'>('overview');
     const [isSubmitDrawerOpen, setIsSubmitDrawerOpen] = useState(false);
     
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    
+    // State cho Modal Xóa Cục bộ
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
     
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -74,24 +109,63 @@ export const ProblemDetailPage: React.FC = () => {
     useEffect(() => {
         const fetchDetail = async () => {
             if (!id) return;
-            setLoading(true);
+            setPageLoading(true);
             try {
                 const probRes = await api.get(`/problems/${id}`);
                 setProblem(probRes.problem);
+                
                 api.get(`/submissions/leaderboard/${id}`).then(res => setLeaderboard(res.leaderboard || [])).catch(() => {});
                 if (currentUser) {
                     api.get('/submissions/my').then(res => {
                         setMySubmissions(res.submissions.filter((s: Submission) => s.problemId === Number(id)));
                     }).catch(() => {});
                 }
-            } catch (err) { console.error(err); } finally { setLoading(false); }
+            } catch (err) { 
+                console.error(err); 
+            } finally { 
+                setPageLoading(false); 
+            }
         };
         fetchDetail();
     }, [id, currentUser]);
 
-    // Handlers
-    const handleEdit = () => { if (problem) { setEditingProblem(problem); navigate('/problem-editor'); } };
-    const handleDelete = () => { if (problem) handleDeleteProblem(problem.id); };
+    // --- HANDLERS ---
+
+    const handleEdit = () => { 
+        if (problem) { 
+            setEditingProblem(problem); 
+            // Hỗ trợ cả 2 loại đường dẫn để tránh lỗi 404
+            navigate(`/problems/${problem.id}/edit`); 
+        } 
+    };
+
+    // Hàm gọi Modal xác nhận
+    const handleDeleteClick = () => {
+        setShowDeleteModal(true);
+    };
+
+    // Hàm thực thi xóa (Gọi API trực tiếp)
+    const handleConfirmDelete = async () => {
+        if (!problem) return;
+        setIsDeleting(true);
+        try {
+            await api.delete(`/problems/${problem.id}`);
+            showToast('Đã xóa bài toán thành công', 'success');
+            
+            // Refresh dữ liệu global
+            await fetchAllData();
+            
+            // Chuyển hướng về trang danh sách
+            navigate('/problems', { replace: true });
+        } catch (err: any) {
+            console.error(err);
+            showToast(err.message || "Có lỗi xảy ra khi xóa bài toán.", "error");
+        } finally {
+            setIsDeleting(false);
+            setShowDeleteModal(false);
+        }
+    };
+
     const handleToggleFreeze = async () => {
         if (!problem) return;
         try {
@@ -120,19 +194,37 @@ export const ProblemDetailPage: React.FC = () => {
         try {
             const res = await api.post('/submissions', formData);
             showToast(res.message || 'Nộp bài thành công!', 'success');
+            
             const subRes = await api.get('/submissions/my');
             setMySubmissions(subRes.submissions.filter((s: Submission) => s.problemId === Number(id)));
-            setSelectedFile(null); setIsSubmitDrawerOpen(false); setActiveTab('my_submissions');
-        } catch (err: any) { showToast(err.response?.data?.message || 'Lỗi nộp bài', 'error'); } finally { setSubmitting(false); }
+            
+            setSelectedFile(null); 
+            setIsSubmitDrawerOpen(false); 
+            setActiveTab('my_submissions');
+        } catch (err: any) { 
+            showToast(err.response?.data?.message || err.message || 'Lỗi nộp bài', 'error'); 
+        } finally { 
+            setSubmitting(false); 
+        }
     };
 
     const handleDownloadDataset = async (fileName: string) => {
         if (!problem || !id) return;
         try {
-            const response = await api.get(`/problems/${id}/download/${fileName}`, { responseType: 'blob' });
-            const url = window.URL.createObjectURL(new Blob([response as any]));
-            const link = document.createElement('a'); link.href = url; link.setAttribute('download', formatFileName(fileName)); document.body.appendChild(link); link.click(); link.parentNode?.removeChild(link); window.URL.revokeObjectURL(url);
-        } catch (error) { showToast("Không thể tải file.", "error"); }
+            // [FIX] Sử dụng api.download để xử lý file binary
+            const blob = await api.download(`/problems/${id}/download/${fileName}`);
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a'); 
+            link.href = url; 
+            link.setAttribute('download', formatFileName(fileName)); 
+            document.body.appendChild(link); 
+            link.click(); 
+            link.parentNode?.removeChild(link); 
+            window.URL.revokeObjectURL(url);
+        } catch (error) { 
+            console.error("Download failed:", error);
+            showToast("Không thể tải file. Vui lòng thử lại.", "error"); 
+        }
     };
 
     const currentTOC = useMemo(() => {
@@ -142,14 +234,23 @@ export const ProblemDetailPage: React.FC = () => {
         return [];
     }, [activeTab, problem]);
 
-    if (loading) return <div className="min-h-screen flex items-center justify-center"><LoadingSpinner /></div>;
-    if (!problem) return <div className="text-center p-20 text-slate-500 font-medium">Không tìm thấy bài toán.</div>;
+    if (pageLoading) return <div className="min-h-screen flex items-center justify-center"><LoadingSpinner /></div>;
+    if (!problem) return <div className="text-center p-20 text-slate-500 font-medium">Không tìm thấy bài toán hoặc đã bị xóa.</div>;
 
     const trainSet = problem.datasets?.find(d => d.split === 'train');
     const testSet = problem.datasets?.find(d => d.split === 'public_test');
 
     return (
         <div className="bg-[#F5F7FA] min-h-screen font-sans text-slate-900">
+            {/* Modal Xóa Cục Bộ */}
+            <DeleteProblemModal 
+                isOpen={showDeleteModal}
+                onClose={() => setShowDeleteModal(false)}
+                onConfirm={handleConfirmDelete}
+                isDeleting={isDeleting}
+                problemName={problem.name}
+            />
+
             {/* Header */}
             <div className="bg-white border-b border-slate-200 pt-8 px-6 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
                 <div className="max-w-[1400px] mx-auto">
@@ -182,7 +283,15 @@ export const ProblemDetailPage: React.FC = () => {
                                 <div className="flex items-center justify-end gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
                                     <button onClick={handleEdit} className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all flex-1 flex justify-center" title="Sửa"><Edit className="w-4 h-4" /></button>
                                     <button onClick={handleToggleFreeze} className={`p-2 hover:bg-amber-50 rounded-lg transition-all flex-1 flex justify-center ${problem.isFrozen ? 'text-amber-600' : 'text-slate-500 hover:text-amber-600'}`} title="Khóa">{problem.isFrozen ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}</button>
-                                    <button onClick={handleDelete} className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all flex-1 flex justify-center" title="Xóa"><Trash2 className="w-4 h-4" /></button>
+                                    
+                                    {/* Nút Xóa: Gọi hàm mở Modal cục bộ */}
+                                    <button 
+                                        onClick={handleDeleteClick} 
+                                        className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all flex-1 flex justify-center" 
+                                        title="Xóa"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             )}
                             {problem.coverImageUrl && (
@@ -237,7 +346,7 @@ export const ProblemDetailPage: React.FC = () => {
                                         <thead className="bg-white text-xs font-bold uppercase text-slate-500 border-b border-slate-100"><tr><th className="px-6 py-4 w-20 text-center">Rank</th><th className="px-6 py-4">User</th><th className="px-6 py-4 text-right">Score</th><th className="px-6 py-4 text-right">Entries</th><th className="px-6 py-4 text-right">Last</th></tr></thead>
                                         <tbody className="divide-y divide-slate-50">
                                             {leaderboard.length === 0 ? <tr><td colSpan={5} className="p-12 text-center text-slate-500 italic">Chưa có dữ liệu.</td></tr> : leaderboard.map((entry, idx) => (
-                                                <tr key={idx} className={`hover:bg-slate-50 transition-colors ${entry.username === currentUser?.username ? 'bg-indigo-50/30' : ''}`}><td className="px-6 py-4 text-center">{idx < 3 ? <span className={`inline-flex w-7 h-7 items-center justify-center rounded-full text-xs font-bold ${idx===0?'bg-amber-100 text-amber-700':idx===1?'bg-slate-200 text-slate-700':'bg-orange-100 text-orange-800'}`}>{idx+1}</span> : <span className="font-bold text-slate-400">{idx+1}</span>}</td><td className="px-6 py-4 font-bold text-slate-800"><button onClick={() => navigateToProfile(entry.username)} className="flex items-center gap-3 hover:text-indigo-600 transition-colors group"><div className="w-8 h-8 rounded-full flex items-center justify-center text-xs text-white font-bold shadow-sm group-hover:scale-110 transition-transform" style={{backgroundColor: entry.avatarColor||'#6366f1'}}>{entry.username[0].toUpperCase()}</div>{entry.username}</button></td><td className="px-6 py-4 text-right font-mono font-bold text-indigo-600">{Number(entry.score).toFixed(5)}</td><td className="px-6 py-4 text-right text-sm text-slate-500">{entry.submissionCount||1}</td><td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">{formatDate(entry.time)}</td></tr>
+                                                <tr key={idx} className={`hover:bg-slate-50 transition-colors ${entry.username === currentUser?.username ? 'bg-indigo-50/30' : ''}`}><td className="px-6 py-4 text-center">{idx < 3 ? <span className={`inline-flex w-7 h-7 items-center justify-center rounded-full text-xs font-bold ${idx===0?'bg-amber-100 text-amber-700':idx===1?'bg-slate-200 text-slate-700':'bg-orange-100 text-orange-800'}`}>{idx+1}</span> : <span className="font-bold text-slate-400">{idx+1}</span>}</td><td className="px-6 py-4 font-bold text-slate-800"><button onClick={() => navigate(`/profile/${entry.username}`)} className="flex items-center gap-3 hover:text-indigo-600 transition-colors group"><div className="w-8 h-8 rounded-full flex items-center justify-center text-xs text-white font-bold shadow-sm group-hover:scale-110 transition-transform" style={{backgroundColor: entry.avatarColor||'#6366f1'}}>{entry.username[0].toUpperCase()}</div>{entry.username}</button></td><td className="px-6 py-4 text-right font-mono font-bold text-indigo-600">{Number(entry.score).toFixed(5)}</td><td className="px-6 py-4 text-right text-sm text-slate-500">{entry.submissionCount||1}</td><td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">{formatDate(entry.time)}</td></tr>
                                             ))}
                                         </tbody>
                                     </table>
@@ -263,7 +372,6 @@ export const ProblemDetailPage: React.FC = () => {
 
                     <div className="lg:col-span-3 space-y-6">
                         <div className="sticky top-6 space-y-6">
-                            
                             {/* AI Assistant */}
                             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 overflow-hidden">
                                 <div className="flex items-center gap-2 mb-3">
@@ -285,7 +393,7 @@ export const ProblemDetailPage: React.FC = () => {
                                 )}
                             </div>
 
-                            {/* [FIXED] Tags Section */}
+                            {/* Tags Section */}
                             {problem.tags && problem.tags.length > 0 && (
                                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                                     <h4 className="font-bold text-slate-900 text-sm mb-3 flex items-center gap-2 uppercase tracking-wide"><Tag className="w-4 h-4 text-slate-500"/> Tags</h4>
@@ -312,8 +420,6 @@ export const ProblemDetailPage: React.FC = () => {
                                     </div>
                                 </div>
                             )}
-                            
-                            {/* [FIXED] Đã xóa phần "Cơ chế chấm" theo yêu cầu của bạn */}
                         </div>
                     </div>
                 </div>

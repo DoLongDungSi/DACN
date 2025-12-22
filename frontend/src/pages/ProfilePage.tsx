@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { Briefcase, GraduationCap, Award, Activity, Globe, Github, Linkedin, Twitter, MapPin, Mail, User as UserIcon, Send } from 'lucide-react';
+import { Briefcase, GraduationCap, Award, Activity, Globe, Github, Linkedin, Twitter, MapPin, Mail, User as UserIcon, Send, EyeOff } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, parseISO, formatDistanceToNow, startOfDay } from 'date-fns';
 import { useAppContext } from '../hooks/useAppContext';
@@ -10,23 +10,30 @@ import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 export const ProfilePage: React.FC = () => {
     const {
         users, viewingUserId, currentUser, submissions, problems, leaderboardData,
-        navigate, // Use navigate for redirection
+        navigate,
         setError, loading
     } = useAppContext();
 
     // Determine whose profile to show
     const profileUserId = viewingUserId ?? currentUser?.id;
-    // Find the user data based on the ID
-    const profileUser = useMemo(() => users.find((u) => u.id === profileUserId), [users, profileUserId]);
+
+    // FIX 1: Ưu tiên lấy từ currentUser nếu đang xem profile của chính mình
+    // Danh sách 'users' thường là dữ liệu public (có thể bị ẩn email), trong khi 'currentUser' có đủ thông tin.
+    const profileUser = useMemo(() => {
+        if (currentUser && profileUserId === currentUser.id) {
+            return currentUser;
+        }
+        return users.find((u) => u.id === profileUserId);
+    }, [users, profileUserId, currentUser]);
 
      // Redirect if user not found after data load
      useEffect(() => {
         if (!loading && users.length > 0 && profileUserId && !profileUser) {
             console.warn(`User with ID ${profileUserId} not found. Redirecting.`);
             setError(`Không tìm thấy người dùng.`);
-            navigate('problems', undefined, true); // Use navigate to redirect
+            navigate('problems', undefined, true);
         }
-    }, [profileUser, profileUserId, users, navigate, setError, loading]); // Added navigate
+    }, [profileUser, profileUserId, users, navigate, setError, loading]);
 
 
     // Calculate user stats, memoized for performance
@@ -35,13 +42,15 @@ export const ProfilePage: React.FC = () => {
             solvedProblems: number;
             totalSubmissions: number;
             bestRank: number | string;
-            // Removed successRate
             activityData: { date: string; isoDate: string; submissions: number }[];
          } | null => {
             if (userId === undefined || !users.length || !submissions.length) return null;
 
             const user = users.find((u) => u.id === userId);
-            if (!user) return null;
+            // Fallback to profileUser if not found in users list (edge case)
+            const targetUser = user || (profileUser?.id === userId ? profileUser : null);
+            
+            if (!targetUser) return null;
 
             const userSubs = submissions.filter((s: Submission) => s.userId === userId);
             const totalSubmissionsCount = userSubs.length;
@@ -58,7 +67,7 @@ export const ProfilePage: React.FC = () => {
 
             const userRanks = Object.values(leaderboardData)
                 .flat()
-                .filter((e: LeaderboardEntry) => e.username === user.username && typeof e.rank === 'number')
+                .filter((e: LeaderboardEntry) => e.username === targetUser.username && typeof e.rank === 'number')
                 .map((e: LeaderboardEntry) => e.rank as number);
             const bestRankValue = userRanks.length > 0 ? Math.min(...userRanks) : null;
 
@@ -82,17 +91,15 @@ export const ProfilePage: React.FC = () => {
                 }))
                 .sort((a, b) => a.isoDate.localeCompare(b.isoDate));
 
-            // Removed successRate calculation
-
             return {
                 solvedProblems: solvedProblemsCount,
                 totalSubmissions: totalSubmissionsCount,
-                bestRank: bestRankValue === null ? '-' : `#${bestRankValue}`, // Add # to rank
+                bestRank: bestRankValue === null ? '-' : `#${bestRankValue}`,
                 activityData: activityData,
             };
         };
         return calculateUserStats(profileUser?.id);
-    }, [profileUser, users, submissions, leaderboardData, problems.length]); // Dependencies
+    }, [profileUser, users, submissions, leaderboardData, problems.length]);
 
 
     const formatLink = (url?: string | null) => {
@@ -110,19 +117,23 @@ export const ProfilePage: React.FC = () => {
         );
     }
 
+    const isOwnerViewing = currentUser?.id === profileUser.id;
     const profile = profileUser.profile || {};
     const joinLabel = profileUser.joinedAt ? formatDistanceToNow(parseISO(profileUser.joinedAt), { addSuffix: true }) : 'không rõ';
+    
     const socialLinks = [
         { label: 'Website', icon: Globe, url: formatLink(profile.website) },
         { label: 'GitHub', icon: Github, url: formatLink(profile.github) },
         { label: 'LinkedIn', icon: Linkedin, url: formatLink(profile.linkedin) },
         { label: 'Twitter', icon: Twitter, url: formatLink(profile.twitter) },
     ].filter(link => link.url);
+    
     const statCards = [
         { label: 'Bài đã giải', value: stats?.solvedProblems ?? 0, suffix: ` / ${problems.length}` },
         { label: 'Lượt nộp', value: stats?.totalSubmissions ?? 0 },
         { label: 'Hạng cao nhất', value: stats?.bestRank ?? '-' },
     ];
+    
     const sortTimeline = (a: Education | WorkExperience, b: Education | WorkExperience) => {
         const getYear = (duration: string | undefined) => {
             if (!duration) return 0;
@@ -133,9 +144,9 @@ export const ProfilePage: React.FC = () => {
         };
         return getYear(b.duration) - getYear(a.duration);
     };
+    
     const sortedEducation = (profile.education || []).sort(sortTimeline);
     const sortedWorkExperience = (profile.workExperience || []).sort(sortTimeline);
-    const isOwnerViewing = currentUser?.id === profileUser.id;
 
     return (
         <div className="profile-wrapper -m-4 sm:-m-6 lg:-m-8">
@@ -167,6 +178,7 @@ export const ProfilePage: React.FC = () => {
                                 </div>
                             </div>
                             <div className="mt-6 flex flex-wrap gap-3">
+                                {/* FIX 2: Logic hiển thị nút liên hệ */}
                                 {profile.allowJobContact ? (
                                     profileUser.email ? (
                                         <a href={`mailto:${profileUser.email}`} className="contact-chip">
@@ -174,8 +186,15 @@ export const ProfilePage: React.FC = () => {
                                             Gửi liên hệ
                                         </a>
                                     ) : (
+                                        // Chỉ hiện thông báo này nếu thực sự allowJobContact=true nhưng không có email
+                                        // Với FIX 1 thì owner sẽ không bao giờ thấy dòng này nếu họ có email
                                         <span className="chip-pill text-xs">Email chưa công khai</span>
                                     )
+                                ) : isOwnerViewing ? (
+                                    // Hiển thị trạng thái cho chủ sở hữu biết
+                                    <span className="chip-pill text-xs flex items-center gap-1 bg-white/10 text-slate-300 border border-white/20">
+                                        <EyeOff className="w-3 h-3" /> Đang ẩn liên hệ
+                                    </span>
                                 ) : null}
                             </div>
                         </div>
@@ -226,8 +245,19 @@ export const ProfilePage: React.FC = () => {
                                     </span>
                                     <div>
                                         <p className="info-label">Liên hệ</p>
-                                        <p className="info-value">
-                                            {profile.allowJobContact && profileUser.email ? profileUser.email : 'Không công khai'}
+                                        {/* FIX 3: Hiển thị email nếu allowJobContact=true HOẶC là chủ sở hữu */}
+                                        <p className="info-value truncate max-w-[200px]" title={profileUser.email || ''}>
+                                            {(profile.allowJobContact || isOwnerViewing) && profileUser.email 
+                                                ? (
+                                                    <span>
+                                                        {profileUser.email}
+                                                        {!profile.allowJobContact && isOwnerViewing && (
+                                                            <span className="text-xs text-slate-400 font-normal ml-1">(Chỉ mình bạn thấy)</span>
+                                                        )}
+                                                    </span>
+                                                ) 
+                                                : 'Không công khai'
+                                            }
                                         </p>
                                     </div>
                                 </li>
