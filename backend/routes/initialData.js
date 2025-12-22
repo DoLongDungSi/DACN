@@ -119,7 +119,7 @@ router.get('/', optionalAuth, async (req, res) => {
 
         // 4. Lấy Users (Thông tin public cho Profile)
         const usersRes = await pool.query(`
-            SELECT id, username, role, avatar_url, avatar_color, joined_at, profile
+            SELECT id, username, email, role, avatar_url, avatar_color, joined_at, profile
             FROM users
         `);
 

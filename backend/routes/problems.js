@@ -190,6 +190,7 @@ router.post('/:id/hint', authMiddleware, async (req, res) => {
 
         // Lấy API Key từ biến môi trường
         const apiKey = process.env.OPENROUTER_API_KEY;
+        const BOT_URL = process.env.BOT_URL;
         if (!apiKey) return res.status(503).json({ message: 'AI Service unavailable (Missing Key)' });
 
         const systemPrompt = process.env.HINT_SYSTEM_PROMPT || "You are a helpful AI assistant for Data Science competitions.";
@@ -204,7 +205,7 @@ router.post('/:id/hint', authMiddleware, async (req, res) => {
         `;
 
         // Gọi OpenRouter API
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        const response = await fetch(BOT_URL, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${apiKey}`,
